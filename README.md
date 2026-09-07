@@ -66,6 +66,14 @@ The top-right buttons open scores and pause. The pause menu includes class
 selection, saved look sensitivity, and optional full screen. Both orientations
 work; landscape leaves more room around the controls.
 
+Mobile graphics default to **Auto**, which starts at up to 1.5× resolution
+and adjusts gradually to sustained frame times. **Performance** uses up to
+1× resolution and disables edge smoothing; **Quality** uses up to 2× with
+stronger texture filtering. Both Auto and Quality smooth the scene and weapon
+edges using supported HDR multisampling, with FXAA as the fallback. Resolution
+stays within pixel and GPU size limits. Choose a preset from the title or pause
+menu; the selection is saved on the device.
+
 ## Frontend
 
 The viewer opens on a menu shell rather than a bare loading message. It has a
@@ -337,6 +345,8 @@ npm run ai:test
 npm run ai:enemy
 npm run ai:life
 npm run ai:mobile
+npm run ai:graphics
+npm run ai:graphics -- fallback
 npm run ai:record -- 10
 ```
 
@@ -353,6 +363,15 @@ Outputs are written to `artifacts/ai-game/`:
 `ai:mobile` writes to `artifacts/ai-mobile/`. It tests simultaneous touch
 contacts, action buttons, interruption recovery, class selection, and match
 restart, with screenshots at phone and tablet sizes in both orientations.
+
+`ai:graphics` writes to `artifacts/ai-graphics/`. It checks rendering presets,
+high-density phone buffers, portrait/tablet resizing, persistence, and held
+touch input across resolution changes. `fallback` simulates unavailable HDR
+multisampling to verify the FXAA path. Use `AI_GAME_ARTIFACT_DIR` to retain both
+runs separately. These software-rendered checks verify behavior and visuals;
+real-device frame rates and battery use need phone measurements.
+Set `AI_GAME_MOBILE=1` with `npm run ai:record -- 10 m27` to record the mobile
+rendering path at a high-density phone viewport.
 
 Set `AI_GAME_HEADED=1` to watch the controlled browser. `BROWSER_TEST_URL` can
 point the harness at an existing server, and `BROWSER_PATH` can select a custom

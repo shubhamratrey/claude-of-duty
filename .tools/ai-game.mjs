@@ -4,13 +4,15 @@ import path from 'node:path';
 import process from 'node:process';
 import { chromium } from 'playwright-core';
 import { runMobileStartup, runMobileTest } from './mobile-game.mjs';
+import { runGraphicsTest } from './graphics-game.mjs';
 
 const root = process.cwd();
 const webRoot = path.resolve(root, 'export', 'web');
 const artifactRoot = path.resolve(root, process.env.AI_GAME_ARTIFACT_DIR ??
-  (process.argv[2] === 'mobile-test' ? 'artifacts/ai-mobile' : 'artifacts/ai-game'));
+  (process.argv[2] === 'mobile-test' ? 'artifacts/ai-mobile' : process.argv[2] === 'graphics-test' ? 'artifacts/ai-graphics' : 'artifacts/ai-game'));
 const command = process.argv[2] ?? 'help';
-const viewport = command === 'mobile-test' ? { width: 844, height: 390 } : { width: 1280, height: 720 };
+const touchContext = ['mobile-test', 'graphics-test'].includes(command) || process.env.AI_GAME_MOBILE === '1';
+const viewport = touchContext ? { width: 844, height: 390 } : { width: 1280, height: 720 };
 const commandArgument = process.argv[3];
 const commandOption = process.argv[4];
 
@@ -47,10 +49,12 @@ Usage:
   npm run ai:game -- enemy-test
   npm run ai:game -- life-test
   npm run ai:game -- mobile-test
+  npm run ai:game -- graphics-test [fallback]
   npm run ai:game -- record [seconds] [weapon]
 
 Environment:
   AI_GAME_HEADED=1             Show the controlled browser window
+  AI_GAME_MOBILE=1             Use a high-density touch viewport (also for record)
   AI_GAME_ARTIFACT_DIR=<path>  Override artifacts/ai-game
   BROWSER_PATH=<path>          Override Chrome or Edge executable
   BROWSER_TEST_URL=<url>       Use an already-running game server
@@ -131,7 +135,7 @@ async function run() {
     process.stdout.write(usage());
     return;
   }
-  if (!['state', 'screenshot', 'test', 'enemy-test', 'life-test', 'mobile-test', 'record'].includes(command)) {
+  if (!['state', 'screenshot', 'test', 'enemy-test', 'life-test', 'mobile-test', 'graphics-test', 'record'].includes(command)) {
     throw new Error(`Unknown command: ${command}\n\n${usage()}`);
   }
 
@@ -173,11 +177,23 @@ async function run() {
     });
     context = await browser.newContext({
       viewport,
-      ...(command === 'mobile-test' ? { isMobile: true, hasTouch: true, deviceScaleFactor: 1 } : {}),
+      ...(touchContext ? { isMobile: true, hasTouch: true, deviceScaleFactor: command === 'mobile-test' ? 1 : 2 } : {}),
       ...(command === 'record' ? { recordVideo: { dir: videoDirectory, size: viewport } } : {}),
     });
     page = await context.newPage();
     video = page.video();
+    if (touchContext) {
+      await page.route('**/api/plays', route => route.fulfill({ contentType: 'application/json', body: '{"players":1,"plays":1}' }));
+    }
+    if (command === 'graphics-test' && commandArgument === 'fallback') {
+      await page.addInitScript(() => {
+        const original = WebGL2RenderingContext.prototype.getInternalformatParameter;
+        WebGL2RenderingContext.prototype.getInternalformatParameter = function(target, format, pname) {
+          if (format === this.RGBA16F && pname === this.SAMPLES) return new Int32Array();
+          return original.call(this, target, format, pname);
+        };
+      });
+    }
 
     page.on('console', (message) => {
       const entry = `[console:${message.type()}] ${message.text()}`;
@@ -231,6 +247,8 @@ async function run() {
 
     if (command === 'mobile-test') {
       inputProbe = await runMobileTest(page, artifactRoot);
+    } else if (command === 'graphics-test') {
+      inputProbe = await runGraphicsTest(page, artifactRoot, commandArgument === 'fallback');
     } else if (command === 'screenshot' && commandArgument) {
       const options = await page.evaluate(() => globalThis.hijacked.debug.getState().weapon);
       if (options.availableWeapons.includes(commandArgument)) {
@@ -351,7 +369,7 @@ async function run() {
     await writeJson('state.json', state);
     await page.screenshot({ path: path.join(artifactRoot, 'screenshot.png') });
 
-    const checks = command === 'mobile-test' ? {
+    const checks = ['mobile-test', 'graphics-test'].includes(command) ? {
       ...startupChecks,
       ...inputProbe.checks,
       noBrowserErrors: errors.length === 0,

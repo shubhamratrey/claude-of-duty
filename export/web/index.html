@@ -562,6 +562,8 @@
     </section>
     <pre class="fe-controls" id="fe-controls"></pre>
     <div class="touch-only touch-settings" id="touch-settings">
+      <label for="touch-graphics">Graphics <select id="touch-graphics"><option value="auto">Auto</option><option value="performance">Performance</option><option value="quality">Quality</option></select></label>
+      <p id="touch-graphics-hint">Balances sharpness and smooth play.</p>
       <label for="touch-sensitivity">Look sensitivity <input id="touch-sensitivity" type="range" min="0.4" max="2" step="0.1" value="1"><output id="touch-sensitivity-value" for="touch-sensitivity">1.0×</output></label>
       <p>Push the stick forward to sprint. Tap aim and crouch to toggle.</p>
       <p>Landscape gives you more room to aim.</p>
@@ -647,6 +649,8 @@ import { MedalTracker } from './medals.js';
 import { Hud } from './hud.js';
 import { Frontend } from './frontend.js';
 import { TouchControls } from './touch-controls.js';
+import { GraphicsSettings, filterTextures } from './graphics-settings.js';
+import { GraphicsRenderer } from './graphics-renderer.js';
 import { PlayCounter } from './play-counter.js';
 import { loadCollisionWorld } from './collision-world.js';
 import { optimizeStaticScene } from './scene-optimizer.js';
@@ -660,20 +664,22 @@ scene.fog = new THREE.Fog(0x87a8c8, HAZE.near, HAZE.far);
 const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 1, 20000);
 camera.rotation.order = 'YXZ';
 
-const MAX_RENDER_PIXELS = 1600 * 900;
-const renderPixelRatio = () => Math.max(0.5, Math.min(
-  devicePixelRatio,
-  1,
-  Math.sqrt(MAX_RENDER_PIXELS / Math.max(1, innerWidth * innerHeight)),
-));
+let savedGraphics = 'auto';
+try { savedGraphics = localStorage.getItem('hijacked.graphics') ?? 'auto'; } catch {}
+const graphics = new GraphicsSettings({ mobile: matchMedia('(pointer: coarse)').matches, preset: savedGraphics });
 const renderer = new THREE.WebGLRenderer({
   antialias: false,
   powerPreference: 'high-performance',
 });
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(renderPixelRatio());
+const gl = renderer.getContext();
+const maxRenderSize = Math.min(renderer.capabilities.maxTextureSize,
+  gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), ...gl.getParameter(gl.MAX_VIEWPORT_DIMS));
+graphics.setViewport(innerWidth, innerHeight, devicePixelRatio, maxRenderSize);
+renderer.setPixelRatio(graphics.pixelRatio);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.autoClear = false;
+const graphicsRenderer = new GraphicsRenderer(renderer);
 document.body.appendChild(renderer.domElement);
 
 const VIEWMODEL_HANDS = 'viewmodel/c_usa_mp_fbi_shortsleeve_viewhands_lod0.glb';
@@ -1021,6 +1027,36 @@ function sizeGradeTarget() {
   if (!gradeTarget) return;
   const ratio = renderer.getPixelRatio();
   gradeTarget.setSize(Math.floor(innerWidth * ratio), Math.floor(innerHeight * ratio));
+  graphicsRenderer.setSize(gradeTarget.width, gradeTarget.height);
+}
+
+function resizeGraphicsBuffer() {
+  // Change only the drawing buffer, preserving CSS touch coordinates and
+  // pointer capture while Auto adjusts resolution during a thumb gesture.
+  renderer.setDrawingBufferSize(innerWidth, innerHeight, graphics.pixelRatio);
+  sizeGradeTarget();
+}
+
+function refreshTextureFiltering() {
+  const maximum = renderer.capabilities.getMaxAnisotropy();
+  graphicsRenderer.filteredTextures = filterTextures(scene, graphics.anisotropy, maximum);
+  for (const slot of weaponSlots.values()) {
+    graphicsRenderer.filteredTextures += filterTextures(slot.viewmodel.scene, graphics.anisotropy, maximum);
+  }
+}
+
+function applyGraphicsSettings() {
+  resizeGraphicsBuffer();
+  if (gradeTarget) graphicsRenderer.configure(graphics.antialias, gradeTarget);
+  refreshTextureFiltering();
+}
+
+function setGraphicsPreset(preset) {
+  if (!graphics.setPreset(preset)) return false;
+  try { localStorage.setItem('hijacked.graphics', graphics.preset); } catch {}
+  applyGraphicsSettings();
+  renderGraphicsSettings();
+  return graphics.preset;
 }
 
 loadGradeLut().then((lut) => {
@@ -1033,6 +1069,7 @@ loadGradeLut().then((lut) => {
   gradeTarget.texture.minFilter = THREE.LinearFilter;
   gradeTarget.texture.magFilter = THREE.LinearFilter;
   sizeGradeTarget();
+  graphicsRenderer.configure(graphics.antialias, gradeTarget);
   gradeMaterial = new THREE.ShaderMaterial({
     ...POST_SHADER,
     uniforms: THREE.UniformsUtils.clone(POST_SHADER.uniforms),
@@ -1254,8 +1291,23 @@ const touchControls = new TouchControls({
     applyLook(x, y, 0.005 * sensitivity * (viewmodel.aiming ? 0.5 : 1));
   },
   onAction: (action) => { if (canControlPlayer() && action === 'reload') reloadWeapon(); },
-  onModeChange: () => updateControlHints(),
+  onModeChange: () => {
+    graphics.mobile = true;
+    applyGraphicsSettings();
+    updateControlHints();
+  },
 });
+const graphicsSelect = document.getElementById('touch-graphics');
+function renderGraphicsSettings() {
+  graphicsSelect.value = graphics.preset;
+  document.getElementById('touch-graphics-hint').textContent = {
+    auto: 'Balances sharpness and smooth play.',
+    performance: 'Lighter graphics for smoother play.',
+    quality: 'Sharper detail and smoother edges. Uses more battery.',
+  }[graphics.preset];
+}
+renderGraphicsSettings();
+graphicsSelect.addEventListener('change', () => setGraphicsPreset(graphicsSelect.value));
 const touchSensitivity = document.getElementById('touch-sensitivity');
 const sensitivityValue = document.getElementById('touch-sensitivity-value');
 touchSensitivity.value = touchControls.sensitivity;
@@ -1414,6 +1466,7 @@ function loadWeaponSlot(slot) {
         },
       );
       await slotViewmodel.loadClips(definition.clips);
+      filterTextures(slotViewmodel.scene, graphics.anisotropy, renderer.capabilities.getMaxAnisotropy());
       frontend.setWeaponReady(definition.id, true);
     } catch (error) {
       frontend.setWeaponReady(definition.id, false);
@@ -1847,6 +1900,9 @@ function getDebugState() {
       textures: renderer.info.memory.textures,
       drawingBuffer: [size.x, size.y],
       pixelRatio: debugRound(renderer.getPixelRatio()),
+      graphics: { ...graphics.getState(), ...graphicsRenderer.getState(),
+        sceneBuffer: gradeTarget ? [gradeTarget.width, gradeTarget.height] : null,
+        anisotropy: Math.max(1, Math.min(graphics.anisotropy, renderer.capabilities.getMaxAnisotropy())) },
       frameWork: frameWorkStats(),
       collision: collisionWorld?.stats ?? null,
       scene: mapOptimization,
@@ -1861,6 +1917,7 @@ function getDebugState() {
 function createDebugApi() {
   return {
     getState: getDebugState,
+    setGraphicsPreset,
     // Exercise the post-match shell without waiting for the five-minute clock.
     finishMatch() {
       match.finish();
@@ -1925,7 +1982,9 @@ function createDebugApi() {
       return selectWeapon(id);
     },
     setWeaponCamo(name) {
-      return viewmodel.setCamo(String(name)) ? viewmodel.camo : false;
+      const changed = viewmodel.setCamo(String(name));
+      if (changed) refreshTextureFiltering();
+      return changed ? viewmodel.camo : false;
     },
     respawnPlayer() {
       playerHealth?.respawn();
@@ -2040,7 +2099,7 @@ document.addEventListener('keydown', (event) => {
     setDebugVisibility();
   }
   if (event.code === 'KeyP') showPathToCrosshair();
-  if (event.code === 'KeyK' && locked) viewmodel.cycleCamo();
+  if (event.code === 'KeyK' && locked) { viewmodel.cycleCamo(); refreshTextureFiltering(); }
   if (event.code === 'Tab') {
     scoreboardHeld = true;
     renderMatchUi();
@@ -2177,6 +2236,7 @@ async function start() {
     ).finally(() => frontend.stage('enemy'));
 
     await Promise.all([viewmodelPromise, weaponEffects.loadAudio(), enemyPromise, loadEnvironment()]);
+    refreshTextureFiltering();
 
     const botNames = ['ADMIRAL', 'CORSAIR', 'DEADEYE', 'MARINER', 'ROGUE', 'VIPER'];
     for (const enemy of enemies?.enemies ?? []) {
@@ -2235,6 +2295,9 @@ async function start() {
       parent.add(warmEnemy.root);
     }
     frontend.stage('shaders');
+    // Prime the post-processing buffers once before deployment. The opaque
+    // frontend covers the canvas, so it does not need a full scene every frame.
+    renderFrame();
 
     // Small read/debug surface for automated smoke tests and map tooling.
     globalThis.hijacked = {
@@ -2270,6 +2333,7 @@ async function start() {
 function tick() {
   requestAnimationFrame(tick);
   const frameWorkStartedAt = performance.now();
+  if (graphics.observeFrame(frameWorkStartedAt, ready && canControlPlayer() && !document.hidden)) resizeGraphicsBuffer();
   const dt = Math.min(clock.getDelta(), 0.1);
   const simulationActive = locked && !frontend.visible && !automationPaused &&
     !(touchControls.mode && scoreboardHeld) && match.phase === 'playing';
@@ -2405,9 +2469,11 @@ function tick() {
   updateLightProbes(camera.position);
   // The stride bob lives on the camera only for the draw; gameplay reads the
   // steady camera before and after.
-  viewBob.apply(camera);
-  renderFrame();
-  viewBob.restore(camera);
+  if (!frontend.visible) {
+    viewBob.apply(camera);
+    renderFrame();
+    viewBob.restore(camera);
+  }
   if (ready && performance.now() >= frameWorkWarmupUntil) {
     frameWorkSamples[frameWorkSampleIndex] = performance.now() - frameWorkStartedAt;
     frameWorkSampleIndex = (frameWorkSampleIndex + 1) % frameWorkSamples.length;
@@ -2415,8 +2481,8 @@ function tick() {
   }
 }
 
-// With the grade active the world and viewmodel go into an sRGB-encoded target
-// and the LUT pass writes the canvas; without it they draw straight to screen.
+// The world and weapon share the HDR scene target. Grade once, then use FXAA
+// only when the device cannot multisample that target.
 function renderFrame() {
   if (gradeMaterial && gradeTarget) {
     // Kept in sync here because the vision set's exposure is applied
@@ -2426,10 +2492,8 @@ function renderFrame() {
     renderer.clear();
     renderer.render(scene, camera);
     viewmodel.render(renderer);
-    renderer.setRenderTarget(null);
     gradeMaterial.uniforms.tDiffuse.value = gradeTarget.texture;
-    renderer.clear();
-    renderer.render(gradeScene, gradeCamera);
+    graphicsRenderer.render(gradeScene, gradeCamera);
     return;
   }
   renderer.clear();
@@ -2456,9 +2520,9 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   for (const slot of weaponSlots.values()) slot.viewmodel.setSize(innerWidth, innerHeight);
-  renderer.setPixelRatio(renderPixelRatio());
+  graphics.setViewport(innerWidth, innerHeight, devicePixelRatio, maxRenderSize);
   renderer.setSize(innerWidth, innerHeight);
-  sizeGradeTarget();
+  resizeGraphicsBuffer();
 });
 </script>
 </body>

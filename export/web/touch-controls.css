@@ -56,6 +56,7 @@ body.touch-mode canvas { touch-action: none; }
 .touch-settings { width: min(360px, 90vw); font-size: 12px; }
 .touch-settings label { display: flex; align-items: center; gap: 12px; }
 .touch-settings input { flex: 1; min-width: 80px; min-height: 44px; accent-color: var(--fe-accent); }
+.touch-settings select { flex: 1; min-width: 0; min-height: 44px; margin-left: auto; padding: 0 10px; border: 1px solid #b7dec955; border-radius: 5px; background: #14252e; color: #edf9f5; font: inherit; font-size: 16px; touch-action: manipulation; }
 .touch-settings output { min-width: 32px; }
 .touch-settings p { margin: 4px 0; color: #cddfe7a8; }
 body.touch-mode #blocker {
