@@ -67,6 +67,7 @@ body.touch-mode .fe-content { margin: auto; gap: 16px; flex-shrink: 0; }
 body.touch-mode .fe-btn { min-height: 44px; height: auto; line-height: 44px; touch-action: manipulation; }
 body.touch-mode .fe-class { max-height: none; }
 body.touch-mode .fe-class-grid { overflow: visible; }
+body.touch-mode #blocker[data-screen="welcome"] .touch-settings,
 body.touch-mode #blocker[data-screen="loading"] .touch-settings,
 body.touch-mode #blocker[data-screen="class"] .touch-settings,
 body.touch-mode #blocker[data-screen="error"] .touch-settings { display: none; }

@@ -2,6 +2,67 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+// Exercise a cold visit, including a tap before the game modules finish loading.
+// The full touch suite must not silently bypass this path with ?autostart=1.
+export async function runMobileStartup(page, artifactRoot, url) {
+  const checks = {};
+  const observations = {};
+  let mapRequests = 0;
+  const countMap = request => { if (new URL(request.url()).pathname.endsWith('/hijacked_optimized.glb')) mapRequests++; };
+  page.on('request', countMap);
+  let releaseModule;
+  let pendingModule;
+  const moduleGate = new Promise(resolve => { releaseModule = resolve; });
+  const delayModule = route => {
+    pendingModule = moduleGate.then(() => route.continue());
+    return pendingModule;
+  };
+  await page.route('**/touch-controls.js', delayModule);
+  const check = (name, passed) => { checks[name] = Boolean(passed); assert.ok(passed, name); };
+  const shot = async name => {
+    observations[name] = await page.evaluate(() => ({
+      screen: document.getElementById('blocker').dataset.screen,
+      text: document.getElementById('blocker').innerText,
+      state: globalThis.hijacked?.debug?.getState() ?? null,
+    }));
+    observations[name].mapRequests = mapRequests;
+    await page.screenshot({ path: path.join(artifactRoot, `startup-${name}.png`) });
+    await fs.writeFile(path.join(artifactRoot, 'startup-states.json'), JSON.stringify(observations, null, 2));
+    return observations[name];
+  };
+  try {
+    const response = await page.goto(url, { waitUntil: 'commit', timeout: 30000 });
+    assert.ok(response?.ok(), `Game returned HTTP ${response?.status()}`);
+    await page.waitForFunction(() => globalThis.hijackedStartup instanceof Promise);
+    const prompt = page.locator('#fe-load-game');
+    await prompt.waitFor({ state: 'visible' });
+    const welcome = await shot('welcome');
+    check('startupPromptVisible', welcome.screen === 'welcome' && /tap.*load/i.test(welcome.text));
+    check('startupWaitsForTouch', mapRequests === 0 && welcome.state === null && !welcome.text.includes('0%'));
+    const bounds = await prompt.boundingBox();
+    assert.ok(bounds && bounds.height >= 44, 'startup needs a finger-sized target');
+    // Locator actions wait for the pending document load. This gesture must
+    // happen while that load is deliberately held, as on a slow connection.
+    await page.touchscreen.tap(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    const loading = await shot('early-touch');
+    check('earlyTouchStartsLoading', loading.screen === 'loading' && loading.state === null);
+    // Touchstart, pointerdown and compatibility click must share one boot.
+    await page.touchscreen.tap(400, 180);
+    await shot('repeated-touch');
+    releaseModule();
+    await page.waitForFunction(() => globalThis.hijacked?.debug?.getState().ready, null, { timeout: 180000 });
+    const loaded = await shot('ready');
+    check('earlyTouchReachesTitle', loaded.state?.ready && loaded.screen === 'title');
+    check('startupDownloadsMapOnce', mapRequests === 1);
+    return checks;
+  } finally {
+    releaseModule();
+    await pendingModule;
+    await page.unroute('**/touch-controls.js', delayModule);
+    page.off('request', countMap);
+  }
+}
+
 // Chromium's input protocol sends trusted, simultaneous touch contacts through
 // the browser's hit testing, pointer capture and gesture arbitration.
 export async function runMobileTest(page, artifactRoot) {

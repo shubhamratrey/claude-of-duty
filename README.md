@@ -57,7 +57,8 @@ Controls:
 - `P`: find and draw a navmesh path to the point under the crosshair
 - `Esc`: pause and release the mouse
 
-On a phone or tablet, tap to deploy. Drag the left stick to walk and push it
+On a phone or tablet, tap **Tap or click to load**, then tap to deploy once the
+game is ready. Drag the left stick to walk and push it
 fully forward to sprint. Swipe on the right to look; hold **FIRE** and drag it
 to aim while shooting. **AIM** and **CROUCH** toggle, while **JUMP** and
 **RELOAD** act on a tap. Aiming or firing automatically interrupts sprint.
@@ -186,9 +187,10 @@ been tried and was not enough on its own.
 
 Two consequences worth knowing:
 
-- Automation has to opt out with `?autostart=1`, which `browser-smoke.mjs` and
-  `ai-game.mjs` both do. Without it they wait forever for a game that is
-  deliberately not loading.
+- Automation must either send input or opt out with `?autostart=1`. Desktop
+  smoke checks opt out; `ai:mobile` tests the welcome prompt and sends a real
+  touch before the game modules finish loading, then verifies startup completes
+  with exactly one map download. Early visitor input is remembered while scripts load.
 - Only the equipped rifle loads at boot. The other eight are fetched when the
   class screen opens, so scripted runs that select a rifle directly need
   `await hijacked.debug.loadAllWeapons()` first.

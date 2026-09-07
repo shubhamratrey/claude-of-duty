@@ -109,7 +109,7 @@
 
   .fe-track {
     width: min(430px, 80vw); height: 6px; background: rgba(255, 255, 255, .1);
-    border: 1px solid rgba(255, 255, 255, .18);
+    border: 1px solid rgba(255, 255, 255, .18); overflow: hidden;
   }
   .fe-bar {
     height: 100%; width: 0; background: var(--fe-accent);
@@ -273,7 +273,9 @@
   .fe-message { margin: 0; max-width: 46ch; color: #ff9b90; white-space: pre-line; }
 
   /* One screen at a time; `render()` sets data-screen on the root. */
-  .fe-load, .fe-start, .fe-pause, .fe-class, .fe-controls, .fe-message { display: none; }
+  .fe-welcome, .fe-load, .fe-start, .fe-pause, .fe-class, .fe-controls, .fe-message { display: none; }
+  #blocker[data-screen="welcome"] .fe-welcome { display: block; }
+  #fe-load-game { min-height: 48px; height: auto; line-height: 48px; touch-action: manipulation; }
   #blocker[data-screen="loading"] .fe-load { display: block; }
   #blocker[data-screen="title"] .fe-start,
   #blocker[data-screen="pause"] .fe-pause { display: flex; flex-direction: column; align-items: center; gap: 22px; }
@@ -468,7 +470,7 @@
 </script>
 </head>
 <body>
-<div id="blocker" data-screen="loading">
+<div id="blocker" data-screen="welcome">
   <div class="fe-layer fe-backdrop"></div>
   <div class="fe-layer fe-fog"></div>
   <div class="fe-layer fe-fog slow"></div>
@@ -479,9 +481,12 @@
       <h1 class="fe-wordmark">CLAUDE OF DUTY<span class="fe-subtitle">VIBE SLOPS <b>II</b></span></h1>
       <p class="fe-sub">Browser reconstruction</p>
     </header>
+    <div class="fe-welcome">
+      <button type="button" class="fe-btn" id="fe-load-game">Tap or click to load</button>
+    </div>
     <div class="fe-load">
       <div class="fe-track"><div class="fe-bar" id="fe-bar"></div></div>
-      <div class="fe-status"><span id="fe-caption"></span><span id="fe-percent"></span></div>
+      <div class="fe-status"><span id="fe-caption">Preparing game…</span><span id="fe-percent"></span></div>
     </div>
     <div class="fe-start">
       <figure class="fe-card">
@@ -608,6 +613,22 @@
   <button type="button" class="touch-button touch-scores" id="touch-scores" aria-label="Show scoreboard"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10h4v10m2 0V4h4v16m2 0V7h4v13"/></svg></button>
   <button type="button" class="touch-button touch-pause" id="touch-pause" aria-label="Pause game"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg></button>
 </div>
+<script>
+// Capture the first gesture before module downloads finish. On a phone there
+// may be no second gesture, so an early tap must not disappear during startup.
+globalThis.hijackedStartup = new Promise((resolve) => {
+  const events = ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart', 'click'];
+  function requestLoad() {
+    for (const type of events) removeEventListener(type, requestLoad, true);
+    const shell = document.getElementById('blocker');
+    shell.dataset.screen = 'loading';
+    shell.dataset.determinate = 'false';
+    resolve();
+  }
+  if (new URLSearchParams(location.search).has('autostart')) requestLoad();
+  else for (const type of events) addEventListener(type, requestLoad, { capture: true, passive: true });
+});
+</script>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -1087,6 +1108,7 @@ const WEAPON_CARD_ART = Object.freeze({
   xm8: 'xm8',
 });
 const frontend = new Frontend({
+  waitingForInput: blocker.dataset.screen === 'welcome',
   elements: {
     root: blocker,
     bar: document.getElementById('fe-bar'),
@@ -2422,18 +2444,12 @@ function renderFrame() {
 // plays all time against 125 GB of bandwidth in the first two days of
 // September. A visit that never starts a match now costs ~2.6 MB, not ~47 MB.
 //
-// Any of these events means someone is on the other end, and a person emits one
-// within a second or so of arriving, so the load still overlaps with reading the
-// title screen. A headless crawler emits none of them.
-const BOOT_EVENTS = ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart'];
-function boot() {
-  for (const type of BOOT_EVENTS) removeEventListener(type, boot);
+// The welcome screen asks for input, and the early script above remembers it
+// even while modules are still downloading. Resolve once across all input types.
+globalThis.hijackedStartup.then(() => {
+  frontend.startLoading();
   start();
-}
-// `browser-smoke.mjs` and `ai-game.mjs` drive the page without ever moving a
-// pointer, so they opt back into loading on sight.
-if (new URLSearchParams(location.search).has('autostart')) boot();
-else for (const type of BOOT_EVENTS) addEventListener(type, boot, { passive: true });
+});
 tick();
 
 addEventListener('resize', () => {

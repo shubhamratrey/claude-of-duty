@@ -3,7 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import process from 'node:process';
 import { chromium } from 'playwright-core';
-import { runMobileTest } from './mobile-game.mjs';
+import { runMobileStartup, runMobileTest } from './mobile-game.mjs';
 
 const root = process.cwd();
 const webRoot = path.resolve(root, 'export', 'web');
@@ -140,7 +140,8 @@ async function run() {
   await fs.promises.mkdir(artifactRoot, { recursive: true });
 
   const ownedServer = process.env.BROWSER_TEST_URL ? null : await staticServer();
-  const gameUrl = autostartUrl(process.env.BROWSER_TEST_URL ?? ownedServer.url);
+  const baseUrl = process.env.BROWSER_TEST_URL ?? ownedServer.url;
+  const gameUrl = command === 'mobile-test' ? baseUrl : autostartUrl(baseUrl);
   const consoleMessages = [];
   const errors = [];
   const recordSeconds = Math.max(1, Math.min(60, Number(commandArgument) || 5));
@@ -155,6 +156,7 @@ async function run() {
   let result;
   let failure;
   let inputProbe = null;
+  let startupChecks = {};
 
   try {
     browser = await chromium.launch({
@@ -195,8 +197,12 @@ async function run() {
       if (!entry.includes('net::ERR_ABORTED')) errors.push(entry);
     });
 
-    const response = await page.goto(gameUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    if (!response?.ok()) throw new Error(`Game returned HTTP ${response?.status() ?? 'unknown'}`);
+    if (command === 'mobile-test') {
+      startupChecks = await runMobileStartup(page, artifactRoot, gameUrl);
+    } else {
+      const response = await page.goto(gameUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      if (!response?.ok()) throw new Error(`Game returned HTTP ${response?.status() ?? 'unknown'}`);
+    }
     await page.waitForFunction(
       () => globalThis.hijacked?.debug?.getState().ready === true,
       null,
@@ -346,6 +352,7 @@ async function run() {
     await page.screenshot({ path: path.join(artifactRoot, 'screenshot.png') });
 
     const checks = command === 'mobile-test' ? {
+      ...startupChecks,
       ...inputProbe.checks,
       noBrowserErrors: errors.length === 0,
     } : command === 'test' ? {
