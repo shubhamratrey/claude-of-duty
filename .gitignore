@@ -47,6 +47,7 @@
 !/.tools/measure_sights.mjs
 !/.tools/pack_web_textures.mjs
 !/.tools/ai-game.mjs
+!/.tools/mobile-game.mjs
 !/export/
 !/export/web/
 !/export/web/**

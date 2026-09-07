@@ -3,12 +3,14 @@ import http from 'node:http';
 import path from 'node:path';
 import process from 'node:process';
 import { chromium } from 'playwright-core';
+import { runMobileTest } from './mobile-game.mjs';
 
 const root = process.cwd();
 const webRoot = path.resolve(root, 'export', 'web');
-const artifactRoot = path.resolve(root, process.env.AI_GAME_ARTIFACT_DIR ?? 'artifacts/ai-game');
-const viewport = { width: 1280, height: 720 };
+const artifactRoot = path.resolve(root, process.env.AI_GAME_ARTIFACT_DIR ??
+  (process.argv[2] === 'mobile-test' ? 'artifacts/ai-mobile' : 'artifacts/ai-game'));
 const command = process.argv[2] ?? 'help';
+const viewport = command === 'mobile-test' ? { width: 844, height: 390 } : { width: 1280, height: 720 };
 const commandArgument = process.argv[3];
 const commandOption = process.argv[4];
 
@@ -27,6 +29,7 @@ const mimeTypes = new Map([
   ['.glb', 'model/gltf-binary'],
   ['.gltf', 'model/gltf+json'],
   ['.html', 'text/html; charset=utf-8'],
+  ['.css', 'text/css; charset=utf-8'],
   ['.js', 'text/javascript; charset=utf-8'],
   ['.json', 'application/json; charset=utf-8'],
   ['.png', 'image/png'],
@@ -43,6 +46,7 @@ Usage:
   npm run ai:game -- test
   npm run ai:game -- enemy-test
   npm run ai:game -- life-test
+  npm run ai:game -- mobile-test
   npm run ai:game -- record [seconds] [weapon]
 
 Environment:
@@ -127,7 +131,7 @@ async function run() {
     process.stdout.write(usage());
     return;
   }
-  if (!['state', 'screenshot', 'test', 'enemy-test', 'life-test', 'record'].includes(command)) {
+  if (!['state', 'screenshot', 'test', 'enemy-test', 'life-test', 'mobile-test', 'record'].includes(command)) {
     throw new Error(`Unknown command: ${command}\n\n${usage()}`);
   }
 
@@ -167,10 +171,9 @@ async function run() {
     });
     context = await browser.newContext({
       viewport,
+      ...(command === 'mobile-test' ? { isMobile: true, hasTouch: true, deviceScaleFactor: 1 } : {}),
       ...(command === 'record' ? { recordVideo: { dir: videoDirectory, size: viewport } } : {}),
     });
-    await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
-    traceStarted = true;
     page = await context.newPage();
     video = page.video();
 
@@ -205,6 +208,11 @@ async function run() {
     // or `screenshot <weapon>` finds only one entry in availableWeapons.
     await page.evaluate(() => globalThis.hijacked.debug.loadAllWeapons());
 
+    // Record the encounter after asset loading; embedding every large binary
+    // transfer adds hundreds of MB and obscures the input/rendering evidence.
+    await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+    traceStarted = true;
+
     await page.evaluate(() => {
       globalThis.hijacked.debug.setActive(true);
       globalThis.hijacked.debug.resume();
@@ -215,7 +223,9 @@ async function run() {
     await writeJson('before-state.json', before);
     await page.screenshot({ path: path.join(artifactRoot, 'before.png') });
 
-    if (command === 'screenshot' && commandArgument) {
+    if (command === 'mobile-test') {
+      inputProbe = await runMobileTest(page, artifactRoot);
+    } else if (command === 'screenshot' && commandArgument) {
       const options = await page.evaluate(() => globalThis.hijacked.debug.getState().weapon);
       if (options.availableWeapons.includes(commandArgument)) {
         const selected = await page.evaluate(
@@ -240,7 +250,12 @@ async function run() {
     } else if (command === 'test') {
       await page.evaluate(() => globalThis.hijacked.debug.resume());
       await page.keyboard.down('w');
-      await page.waitForTimeout(900);
+      // Wall time can contain only a handful of frames under SwiftShader.
+      // Keep real keyboard input held until the physics has actually moved.
+      await page.waitForFunction((origin) => {
+        const feet = globalThis.hijacked.debug.getState().player.feet;
+        return Math.hypot(...feet.map((value, i) => value - origin[i])) > 20;
+      }, before.player.feet, { timeout: 20000 });
       await page.keyboard.up('w');
       await page.evaluate(() => {
         globalThis.__aiMouseProbe = [];
@@ -330,7 +345,10 @@ async function run() {
     await writeJson('state.json', state);
     await page.screenshot({ path: path.join(artifactRoot, 'screenshot.png') });
 
-    const checks = command === 'test' ? {
+    const checks = command === 'mobile-test' ? {
+      ...inputProbe.checks,
+      noBrowserErrors: errors.length === 0,
+    } : command === 'test' ? {
       ready: state.ready === true,
       playerMoved: distance(before.player.feet, state.player.feet) > 10,
       weaponFired: state.weapon.fireCount > before.weapon.fireCount,
@@ -376,6 +394,11 @@ async function run() {
   } catch (error) {
     failure = error;
     errors.push(`[harness] ${error.stack ?? error.message}`);
+    if (page && !page.isClosed()) {
+      const failedState = await page.evaluate(() => globalThis.hijacked?.debug?.getState()).catch(() => null);
+      if (failedState) await writeJson('failure-state.json', failedState);
+      await page.screenshot({ path: path.join(artifactRoot, 'failure.png'), timeout: 10000 }).catch(() => {});
+    }
     result = { command, passed: false, errors, artifacts: artifactRoot };
     await writeJson('report.json', result);
   } finally {
