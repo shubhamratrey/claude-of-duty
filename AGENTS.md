@@ -17,6 +17,12 @@ behavior or visuals.
    `npm run ai:record -- 10` and inspect `recording.webm` or `trace.zip`.
 6. For enemy perception, navigation, combat, or coordination work, run
    `npm run ai:enemy` to stage a reproducible six-enemy encounter.
+7. For touch input or mobile layout work, run `npm run ai:mobile`. It drives
+   simultaneous browser touch contacts and saves state, screenshots, and a
+   trace to `artifacts/ai-mobile`, including portrait and landscape layouts.
+8. For graphics presets or output-buffer changes, run `npm run ai:graphics`
+   and `npm run ai:graphics -- fallback`. Inspect their `graphics-*.png`
+   comparisons and `graphics-states.json`; retain separate artifact directories.
 
 The harness launches its own HTTP server and Chrome/Edge. Set
 `AI_GAME_HEADED=1` only when a visible browser is useful. Generated artifacts
@@ -39,6 +45,10 @@ gameplay implementation details:
 - `damagePlayer(number)`, `respawnPlayer()`, and `respawnEnemies()` create test
   conditions.
 - `teleportEnemy(index, [x, y, z])` and `alertEnemies(radius)` stage encounters.
+- `finishMatch()` stages the results screen; `getState().input.touch` observes
+  touch mode, pointer count, movement axes, and action state.
+- `setGraphicsPreset('auto' | 'performance' | 'quality')` changes the saved
+  graphics setting; `getState().performance.graphics` observes rendering quality.
 
 When adding a gameplay system, expose only compact, serializable observations
 or safe test controls through this API. Do not expose frame-sized geometry,

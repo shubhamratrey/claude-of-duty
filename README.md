@@ -57,6 +57,23 @@ Controls:
 - `P`: find and draw a navmesh path to the point under the crosshair
 - `Esc`: pause and release the mouse
 
+On a phone or tablet, tap **Tap or click to load**, then tap to deploy once the
+game is ready. Drag the left stick to walk and push it
+fully forward to sprint. Swipe on the right to look; hold **FIRE** and drag it
+to aim while shooting. **AIM** and **CROUCH** toggle, while **JUMP** and
+**RELOAD** act on a tap. Aiming or firing automatically interrupts sprint.
+The top-right buttons open scores and pause. The pause menu includes class
+selection, saved look sensitivity, and optional full screen. Both orientations
+work; landscape leaves more room around the controls.
+
+Mobile graphics default to **Auto**, which starts at up to 1.5× resolution
+and adjusts gradually to sustained frame times. **Performance** uses up to
+1× resolution and disables edge smoothing; **Quality** uses up to 2× with
+stronger texture filtering. Both Auto and Quality smooth the scene and weapon
+edges using supported HDR multisampling, with FXAA as the fallback. Resolution
+stays within pixel and GPU size limits. Choose a preset from the title or pause
+menu; the selection is saved on the device.
+
 ## Frontend
 
 The viewer opens on a menu shell rather than a bare loading message. It has a
@@ -136,10 +153,10 @@ that have. The split is deliberate: `players` is the honest answer to "how many
 people have played", and `plays` is the one that moves.
 
 `export/web/play-counter.js` holds the client half and, like `frontend.js`,
-touches no DOM so it tests in node. A play is recorded when pointer lock is
-granted, not when the page loads, so social-card scrapers and bounced tabs
-never reach it; the automation harness enters through `setAutomationActive`
-without taking a lock, so the smoke tests stay out of the totals too. The first
+touches no DOM so it tests in node. A play is recorded when a desktop player
+takes pointer lock or a touch player deploys. Social-card scrapers and bounced
+tabs never reach it; the automation harness enters through `setAutomationActive`
+without counting a play, and the mobile harness uses a local counter stub. The first
 record per page session latches, so resuming from the pause menu does not count
 again. New-versus-returning is a `vibeslops:player` key in `localStorage` —
 clearing site data counts you again, which is unavoidable without asking
@@ -178,9 +195,10 @@ been tried and was not enough on its own.
 
 Two consequences worth knowing:
 
-- Automation has to opt out with `?autostart=1`, which `browser-smoke.mjs` and
-  `ai-game.mjs` both do. Without it they wait forever for a game that is
-  deliberately not loading.
+- Automation must either send input or opt out with `?autostart=1`. Desktop
+  smoke checks opt out; `ai:mobile` tests the welcome prompt and sends a real
+  touch before the game modules finish loading, then verifies startup completes
+  with exactly one map download. Early visitor input is remembered while scripts load.
 - Only the equipped rifle loads at boot. The other eight are fetched when the
   class screen opens, so scripted runs that select a rifle directly need
   `await hijacked.debug.loadAllWeapons()` first.
@@ -326,6 +344,9 @@ npm run ai:screenshot
 npm run ai:test
 npm run ai:enemy
 npm run ai:life
+npm run ai:mobile
+npm run ai:graphics
+npm run ai:graphics -- fallback
 npm run ai:record -- 10
 ```
 
@@ -338,6 +359,19 @@ Outputs are written to `artifacts/ai-game/`:
 - `trace.zip`: a Playwright trace with screenshots and DOM snapshots
 - `recording.webm`: video produced by `ai:record`
 - `report.json`: machine-readable checks and pass/fail status
+
+`ai:mobile` writes to `artifacts/ai-mobile/`. It tests simultaneous touch
+contacts, action buttons, interruption recovery, class selection, and match
+restart, with screenshots at phone and tablet sizes in both orientations.
+
+`ai:graphics` writes to `artifacts/ai-graphics/`. It checks rendering presets,
+high-density phone buffers, portrait/tablet resizing, persistence, and held
+touch input across resolution changes. `fallback` simulates unavailable HDR
+multisampling to verify the FXAA path. Use `AI_GAME_ARTIFACT_DIR` to retain both
+runs separately. These software-rendered checks verify behavior and visuals;
+real-device frame rates and battery use need phone measurements.
+Set `AI_GAME_MOBILE=1` with `npm run ai:record -- 10 m27` to record the mobile
+rendering path at a high-density phone viewport.
 
 Set `AI_GAME_HEADED=1` to watch the controlled browser. `BROWSER_TEST_URL` can
 point the harness at an existing server, and `BROWSER_PATH` can select a custom

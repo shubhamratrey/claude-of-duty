@@ -27,11 +27,12 @@ const CAPTIONS = {
   'enemy weapon': 'enemy weapon',
 };
 
-export const SCREENS = ['loading', 'title', 'pause', 'class', 'error'];
+export const SCREENS = ['welcome', 'loading', 'title', 'pause', 'class', 'error'];
 
 export class Frontend {
   constructor({
     elements = null, onPlay = null, onResume = null, onSelectWeapon = null, onOpenClass = null,
+    waitingForInput = false,
   } = {}) {
     this.elements = elements;
     this.onPlay = onPlay;
@@ -41,7 +42,7 @@ export class Frontend {
     // has not loaded yet. Only a player who browses classes pays for them.
     this.onOpenClass = onOpenClass;
 
-    this.screen = 'loading';
+    this.screen = waitingForInput ? 'welcome' : 'loading';
     this.playing = false;
     this.loads = new Map();
     this.expected = new Map();
@@ -65,6 +66,14 @@ export class Frontend {
 
   get ready() {
     return this.screen === 'title' || this.screen === 'pause';
+  }
+
+  /** The first visitor gesture starts loading; waiting is not download progress. */
+  startLoading() {
+    if (this.screen !== 'welcome') return false;
+    this.screen = 'loading';
+    this.render();
+    return true;
   }
 
   /**

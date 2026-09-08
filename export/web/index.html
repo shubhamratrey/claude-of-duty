@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<link rel="stylesheet" href="touch-controls.css">
 <link rel="icon" href="social/icon-512.png" type="image/png">
 <link rel="apple-touch-icon" href="social/icon-512.png">
 <title>Claude of Duty: Vibe Slops II</title>
@@ -108,7 +109,7 @@
 
   .fe-track {
     width: min(430px, 80vw); height: 6px; background: rgba(255, 255, 255, .1);
-    border: 1px solid rgba(255, 255, 255, .18);
+    border: 1px solid rgba(255, 255, 255, .18); overflow: hidden;
   }
   .fe-bar {
     height: 100%; width: 0; background: var(--fe-accent);
@@ -272,7 +273,9 @@
   .fe-message { margin: 0; max-width: 46ch; color: #ff9b90; white-space: pre-line; }
 
   /* One screen at a time; `render()` sets data-screen on the root. */
-  .fe-load, .fe-start, .fe-pause, .fe-class, .fe-controls, .fe-message { display: none; }
+  .fe-welcome, .fe-load, .fe-start, .fe-pause, .fe-class, .fe-controls, .fe-message { display: none; }
+  #blocker[data-screen="welcome"] .fe-welcome { display: block; }
+  #fe-load-game { min-height: 48px; height: auto; line-height: 48px; touch-action: manipulation; }
   #blocker[data-screen="loading"] .fe-load { display: block; }
   #blocker[data-screen="title"] .fe-start,
   #blocker[data-screen="pause"] .fe-pause { display: flex; flex-direction: column; align-items: center; gap: 22px; }
@@ -467,7 +470,7 @@
 </script>
 </head>
 <body>
-<div id="blocker" data-screen="loading">
+<div id="blocker" data-screen="welcome">
   <div class="fe-layer fe-backdrop"></div>
   <div class="fe-layer fe-fog"></div>
   <div class="fe-layer fe-fog slow"></div>
@@ -478,9 +481,12 @@
       <h1 class="fe-wordmark">CLAUDE OF DUTY<span class="fe-subtitle">VIBE SLOPS <b>II</b></span></h1>
       <p class="fe-sub">Browser reconstruction</p>
     </header>
+    <div class="fe-welcome">
+      <button type="button" class="fe-btn" id="fe-load-game">Tap or click to load</button>
+    </div>
     <div class="fe-load">
       <div class="fe-track"><div class="fe-bar" id="fe-bar"></div></div>
-      <div class="fe-status"><span id="fe-caption"></span><span id="fe-percent"></span></div>
+      <div class="fe-status"><span id="fe-caption">Preparing game…</span><span id="fe-percent"></span></div>
     </div>
     <div class="fe-start">
       <figure class="fe-card">
@@ -555,6 +561,14 @@
       </div>
     </section>
     <pre class="fe-controls" id="fe-controls"></pre>
+    <div class="touch-only touch-settings" id="touch-settings">
+      <label for="touch-graphics">Graphics <select id="touch-graphics"><option value="auto">Auto</option><option value="performance">Performance</option><option value="quality">Quality</option></select></label>
+      <p id="touch-graphics-hint">Balances sharpness and smooth play.</p>
+      <label for="touch-sensitivity">Look sensitivity <input id="touch-sensitivity" type="range" min="0.4" max="2" step="0.1" value="1"><output id="touch-sensitivity-value" for="touch-sensitivity">1.0×</output></label>
+      <p>Push the stick forward to sprint. Tap aim and crouch to toggle.</p>
+      <p>Landscape gives you more room to aim.</p>
+      <button type="button" class="fe-btn" id="touch-fullscreen" hidden>Full screen</button>
+    </div>
     <p class="fe-message" id="fe-message"></p>
   </div>
 </div>
@@ -575,6 +589,8 @@
     <p id="match-result"></p>
     <div class="scoreboard-row head"><span>#</span><span>Player</span><span>Kills</span><span>Deaths</span></div>
     <div id="scoreboard-rows"></div>
+    <button type="button" class="fe-btn touch-only" id="touch-score-close">Back to game</button>
+    <button type="button" class="fe-btn touch-only" id="touch-restart" hidden>Play again</button>
   </div>
 </div>
 <div id="crosshair"></div>
@@ -585,6 +601,36 @@
   <line x1="23" y1="23" x2="17" y2="17"></line>
 </svg>
 <div id="damage"></div>
+<div id="touch-controls" hidden aria-label="Touch controls">
+  <div class="touch-look" data-touch="look" aria-label="Swipe to look"></div>
+  <div class="touch-move" data-touch="move" aria-label="Drag to move; push forward to sprint">
+    <div class="touch-stick"><div class="touch-knob"></div><span>MOVE</span></div>
+  </div>
+  <span class="touch-hint">SWIPE TO LOOK · DRAG FIRE TO AIM</span>
+  <button type="button" class="touch-button touch-fire" data-touch="fire" aria-label="Hold to fire; drag to aim"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 1v5m0 12v5M1 12h5m12 0h5"/></svg><span>FIRE</span></button>
+  <button type="button" class="touch-button touch-aim" data-touch="aim" aria-label="Toggle aim down sights" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M12 7v10M7 12h10"/></svg><span>AIM</span></button>
+  <button type="button" class="touch-button touch-jump" data-touch="jump" aria-label="Jump"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 10 6-6 6 6M12 4v14M4 21h16"/></svg><span>JUMP</span></button>
+  <button type="button" class="touch-button touch-crouch" data-touch="crouch" aria-label="Toggle crouch" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="14" cy="4" r="2"/><path d="m12 8-3 5 7 2-2 6m-3-11 5 2h4M9 13l-5 5h6"/></svg><span>CROUCH</span></button>
+  <button type="button" class="touch-button touch-reload" data-touch="reload" aria-label="Reload"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 10a8 8 0 1 0-2 8M20 4v6h-6"/></svg><span>RELOAD</span></button>
+  <button type="button" class="touch-button touch-scores" id="touch-scores" aria-label="Show scoreboard"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10h4v10m2 0V4h4v16m2 0V7h4v13"/></svg></button>
+  <button type="button" class="touch-button touch-pause" id="touch-pause" aria-label="Pause game"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg></button>
+</div>
+<script>
+// Capture the first gesture before module downloads finish. On a phone there
+// may be no second gesture, so an early tap must not disappear during startup.
+globalThis.hijackedStartup = new Promise((resolve) => {
+  const events = ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart', 'click'];
+  function requestLoad() {
+    for (const type of events) removeEventListener(type, requestLoad, true);
+    const shell = document.getElementById('blocker');
+    shell.dataset.screen = 'loading';
+    shell.dataset.determinate = 'false';
+    resolve();
+  }
+  if (new URLSearchParams(location.search).has('autostart')) requestLoad();
+  else for (const type of events) addEventListener(type, requestLoad, { capture: true, passive: true });
+});
+</script>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -602,6 +648,9 @@ import { FreeForAllMatch } from './free-for-all-match.js';
 import { MedalTracker } from './medals.js';
 import { Hud } from './hud.js';
 import { Frontend } from './frontend.js';
+import { TouchControls } from './touch-controls.js';
+import { GraphicsSettings, filterTextures } from './graphics-settings.js';
+import { GraphicsRenderer } from './graphics-renderer.js';
 import { PlayCounter } from './play-counter.js';
 import { loadCollisionWorld } from './collision-world.js';
 import { optimizeStaticScene } from './scene-optimizer.js';
@@ -615,20 +664,22 @@ scene.fog = new THREE.Fog(0x87a8c8, HAZE.near, HAZE.far);
 const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 1, 20000);
 camera.rotation.order = 'YXZ';
 
-const MAX_RENDER_PIXELS = 1600 * 900;
-const renderPixelRatio = () => Math.max(0.5, Math.min(
-  devicePixelRatio,
-  1,
-  Math.sqrt(MAX_RENDER_PIXELS / Math.max(1, innerWidth * innerHeight)),
-));
+let savedGraphics = 'auto';
+try { savedGraphics = localStorage.getItem('hijacked.graphics') ?? 'auto'; } catch {}
+const graphics = new GraphicsSettings({ mobile: matchMedia('(pointer: coarse)').matches, preset: savedGraphics });
 const renderer = new THREE.WebGLRenderer({
   antialias: false,
   powerPreference: 'high-performance',
 });
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(renderPixelRatio());
+const gl = renderer.getContext();
+const maxRenderSize = Math.min(renderer.capabilities.maxTextureSize,
+  gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), ...gl.getParameter(gl.MAX_VIEWPORT_DIMS));
+graphics.setViewport(innerWidth, innerHeight, devicePixelRatio, maxRenderSize);
+renderer.setPixelRatio(graphics.pixelRatio);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.autoClear = false;
+const graphicsRenderer = new GraphicsRenderer(renderer);
 document.body.appendChild(renderer.domElement);
 
 const VIEWMODEL_HANDS = 'viewmodel/c_usa_mp_fbi_shortsleeve_viewhands_lod0.glb';
@@ -976,6 +1027,36 @@ function sizeGradeTarget() {
   if (!gradeTarget) return;
   const ratio = renderer.getPixelRatio();
   gradeTarget.setSize(Math.floor(innerWidth * ratio), Math.floor(innerHeight * ratio));
+  graphicsRenderer.setSize(gradeTarget.width, gradeTarget.height);
+}
+
+function resizeGraphicsBuffer() {
+  // Change only the drawing buffer, preserving CSS touch coordinates and
+  // pointer capture while Auto adjusts resolution during a thumb gesture.
+  renderer.setDrawingBufferSize(innerWidth, innerHeight, graphics.pixelRatio);
+  sizeGradeTarget();
+}
+
+function refreshTextureFiltering() {
+  const maximum = renderer.capabilities.getMaxAnisotropy();
+  graphicsRenderer.filteredTextures = filterTextures(scene, graphics.anisotropy, maximum);
+  for (const slot of weaponSlots.values()) {
+    graphicsRenderer.filteredTextures += filterTextures(slot.viewmodel.scene, graphics.anisotropy, maximum);
+  }
+}
+
+function applyGraphicsSettings() {
+  resizeGraphicsBuffer();
+  if (gradeTarget) graphicsRenderer.configure(graphics.antialias, gradeTarget);
+  refreshTextureFiltering();
+}
+
+function setGraphicsPreset(preset) {
+  if (!graphics.setPreset(preset)) return false;
+  try { localStorage.setItem('hijacked.graphics', graphics.preset); } catch {}
+  applyGraphicsSettings();
+  renderGraphicsSettings();
+  return graphics.preset;
 }
 
 loadGradeLut().then((lut) => {
@@ -988,6 +1069,7 @@ loadGradeLut().then((lut) => {
   gradeTarget.texture.minFilter = THREE.LinearFilter;
   gradeTarget.texture.magFilter = THREE.LinearFilter;
   sizeGradeTarget();
+  graphicsRenderer.configure(graphics.antialias, gradeTarget);
   gradeMaterial = new THREE.ShaderMaterial({
     ...POST_SHADER,
     uniforms: THREE.UniformsUtils.clone(POST_SHADER.uniforms),
@@ -1063,6 +1145,7 @@ const WEAPON_CARD_ART = Object.freeze({
   xm8: 'xm8',
 });
 const frontend = new Frontend({
+  waitingForInput: blocker.dataset.screen === 'welcome',
   elements: {
     root: blocker,
     bar: document.getElementById('fe-bar'),
@@ -1076,8 +1159,8 @@ const frontend = new Frontend({
     classConfirm: blocker.querySelector('[data-action="class-confirm"]'),
     onAction: (name) => menuAction(name),
   },
-  onPlay: () => renderer.domElement.requestPointerLock(),
-  onResume: () => renderer.domElement.requestPointerLock(),
+  onPlay: () => requestPlay(),
+  onResume: () => requestPlay(),
   onSelectWeapon: (id) => selectWeapon(id),
   onOpenClass: () => loadAllWeaponSlots(),
 });
@@ -1168,6 +1251,8 @@ const yawPitch = new THREE.Euler(0, 0, 0, 'YXZ');
 
 let ready = false;
 let locked = false;
+let mouseFire = false;
+let mouseAim = false;
 let player = null;
 let navigation = null;
 let collisionRoot = null;
@@ -1197,6 +1282,144 @@ const MEDAL_FADE_SECONDS = 0.45;
 
 const match = new FreeForAllMatch({ scoreLimit: 30, timeLimitSeconds: 300 });
 match.register('player', 'YOU', { human: true });
+
+const touchControls = new TouchControls({
+  root: document.getElementById('touch-controls'),
+  onLook: (x, y, sensitivity) => {
+    if (!canControlPlayer()) return;
+    // CSS pixels make the same thumb gesture independent of device DPI.
+    applyLook(x, y, 0.005 * sensitivity * (viewmodel.aiming ? 0.5 : 1));
+  },
+  onAction: (action) => { if (canControlPlayer() && action === 'reload') reloadWeapon(); },
+  onModeChange: () => {
+    graphics.mobile = true;
+    applyGraphicsSettings();
+    updateControlHints();
+  },
+});
+const graphicsSelect = document.getElementById('touch-graphics');
+function renderGraphicsSettings() {
+  graphicsSelect.value = graphics.preset;
+  document.getElementById('touch-graphics-hint').textContent = {
+    auto: 'Balances sharpness and smooth play.',
+    performance: 'Lighter graphics for smoother play.',
+    quality: 'Sharper detail and smoother edges. Uses more battery.',
+  }[graphics.preset];
+}
+renderGraphicsSettings();
+graphicsSelect.addEventListener('change', () => setGraphicsPreset(graphicsSelect.value));
+const touchSensitivity = document.getElementById('touch-sensitivity');
+const sensitivityValue = document.getElementById('touch-sensitivity-value');
+touchSensitivity.value = touchControls.sensitivity;
+sensitivityValue.textContent = `${touchControls.sensitivity.toFixed(1)}×`;
+document.getElementById('touch-settings').addEventListener('click', event => event.stopPropagation());
+touchSensitivity.addEventListener('input', () => {
+  touchControls.setSensitivity(touchSensitivity.value);
+  sensitivityValue.textContent = `${touchControls.sensitivity.toFixed(1)}×`;
+});
+const fullscreenButton = document.getElementById('touch-fullscreen');
+fullscreenButton.hidden = !document.fullscreenEnabled;
+fullscreenButton.addEventListener('click', async () => {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await document.documentElement.requestFullscreen();
+  } catch { /* Playing in the browser remains available when full screen is denied. */ }
+});
+document.addEventListener('fullscreenchange', () => {
+  fullscreenButton.textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen';
+});
+// Secondary touch contacts do not consistently synthesize clicks. Menu
+// shortcuts must still work while the other thumb is holding movement/fire.
+let suppressShortcutClick = false;
+document.addEventListener('pointerdown', () => { suppressShortcutClick = false; }, true);
+document.addEventListener('click', (event) => {
+  if (!suppressShortcutClick) return;
+  suppressShortcutClick = false;
+  if (event.detail === 0) return;
+  // Opening the menu under a finger can retarget its later compatibility
+  // click to the shell and immediately resume. Consume that same gesture;
+  // a fresh pointerdown always starts a new, independent menu interaction.
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
+function bindTouchShortcut(id, action) {
+  const button = document.getElementById(id);
+  button.addEventListener('pointerdown', (event) => {
+    if (event.pointerType !== 'touch') return;
+    event.preventDefault();
+    suppressShortcutClick = true;
+    action();
+  });
+  button.addEventListener('click', (event) => {
+    if (event.pointerType === 'touch' || event.sourceCapabilities?.firesTouchEvents) return;
+    action();
+  });
+}
+bindTouchShortcut('touch-pause', () => suspendPlay());
+bindTouchShortcut('touch-scores', () => {
+  clearKeys();
+  scoreboardHeld = true;
+  renderMatchUi();
+});
+document.getElementById('touch-score-close').addEventListener('click', () => {
+  scoreboardHeld = false;
+  renderMatchUi();
+});
+document.getElementById('touch-restart').addEventListener('click', () => {
+  restartMatch();
+  requestPlay();
+});
+
+function canControlPlayer() {
+  return ready && locked && !frontend.visible && !automationPaused &&
+    !(touchControls.mode && scoreboardHeld) && match.phase === 'playing' && !playerHealth?.dead;
+}
+
+function applyLook(x, y, sensitivity = 0.0022) {
+  yawPitch.setFromQuaternion(camera.quaternion);
+  yawPitch.y -= x * sensitivity;
+  yawPitch.x = THREE.MathUtils.clamp(yawPitch.x - y * sensitivity, -Math.PI / 2, Math.PI / 2);
+  camera.quaternion.setFromEuler(yawPitch);
+  viewmodel.addLook(x, y);
+}
+
+function requestPlay() {
+  if (!ready) return;
+  const audio = weaponEffects.audio.ensureContext();
+  if (audio?.state === 'suspended') void audio.resume().catch(() => {});
+  // Menu buttons must not retain keyboard focus over gameplay.
+  document.activeElement?.blur();
+  if (touchControls.mode) {
+    setAutomationActive(true);
+    playCounter.record().then(renderPlayCount);
+  } else {
+    renderer.domElement.requestPointerLock()?.catch(() => frontend.suspend());
+  }
+}
+
+function suspendPlay() {
+  clearKeys();
+  if (!locked) return;
+  setAutomationActive(false);
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+
+function updateControlHints() {
+  if (!ready) return;
+  frontend.controls = touchControls.mode ? [
+    'Left thumb move · Right thumb swipe to look',
+    'Hold FIRE and drag to aim · JUMP · RELOAD',
+    'Pause for classes and sensitivity · Scores at top right',
+  ] : [
+    'WASD move · Shift sprint · Space jump · C/Ctrl crouch',
+    'Left mouse fire · Right mouse aim · R reload · B respawn',
+    '1 M27 · 2 AN-94 · Create a class from the menu',
+    'K cycle camo · N navmesh · V collision · P path · Esc pause',
+  ];
+  frontend.render();
+  const prompt = document.querySelector('.fe-prompt');
+  if (prompt && touchControls.mode) prompt.textContent = 'Tap to deploy';
+}
 
 const weaponEffects = new WeaponEffects(scene);
 // Reload audio is authored into the clip as notetracks, so the cues play from
@@ -1243,6 +1466,7 @@ function loadWeaponSlot(slot) {
         },
       );
       await slotViewmodel.loadClips(definition.clips);
+      filterTextures(slotViewmodel.scene, graphics.anisotropy, renderer.capabilities.getMaxAnisotropy());
       frontend.setWeaponReady(definition.id, true);
     } catch (error) {
       frontend.setWeaponReady(definition.id, false);
@@ -1307,6 +1531,7 @@ function combatantId(actor) {
 }
 
 function resetPlayerLife() {
+  clearKeys();
   const spawn = enemies?.safeSpawnFor(player);
   if (spawn) {
     player.setSpawn(spawn.position, { eye: false });
@@ -1368,8 +1593,10 @@ function renderMatchUi() {
   }));
   const winner = state.standings.find((entry) => entry.id === state.winnerId);
   matchResult.textContent = state.phase === 'ended'
-    ? `${winner?.id === 'player' ? 'VICTORY' : `${winner?.name ?? 'Unknown'} wins`} · press Enter to play again`
-    : `First to ${state.scoreLimit} kills · hold Tab for scores`;
+    ? `${winner?.id === 'player' ? 'VICTORY' : `${winner?.name ?? 'Unknown'} wins`}${touchControls.mode ? '' : ' · press Enter to play again'}`
+    : `First to ${state.scoreLimit} kills${touchControls.mode ? '' : ' · hold Tab for scores'}`;
+  document.getElementById('touch-restart').hidden = state.phase !== 'ended';
+  document.getElementById('touch-score-close').hidden = state.phase === 'ended';
   scoreboard.classList.toggle('visible', scoreboardHeld || state.phase === 'ended');
 }
 
@@ -1488,6 +1715,10 @@ function showPathToCrosshair() {
 
 function clearKeys() {
   for (const code of Object.keys(keys)) keys[code] = false;
+  mouseFire = mouseAim = false;
+  touchControls.reset();
+  weapon?.setTrigger(false);
+  viewmodel.setAiming(false);
 }
 
 // A kill marker outlives a body marker so the confirmation still reads when
@@ -1585,6 +1816,7 @@ function getDebugState() {
     ready,
     active: locked,
     paused: automationPaused,
+    input: { touch: touchControls.getState() },
     player: player ? {
       feet: debugVector(feet),
       eye: debugVector(player.position),
@@ -1668,6 +1900,9 @@ function getDebugState() {
       textures: renderer.info.memory.textures,
       drawingBuffer: [size.x, size.y],
       pixelRatio: debugRound(renderer.getPixelRatio()),
+      graphics: { ...graphics.getState(), ...graphicsRenderer.getState(),
+        sceneBuffer: gradeTarget ? [gradeTarget.width, gradeTarget.height] : null,
+        anisotropy: Math.max(1, Math.min(graphics.anisotropy, renderer.capabilities.getMaxAnisotropy())) },
       frameWork: frameWorkStats(),
       collision: collisionWorld?.stats ?? null,
       scene: mapOptimization,
@@ -1682,6 +1917,14 @@ function getDebugState() {
 function createDebugApi() {
   return {
     getState: getDebugState,
+    setGraphicsPreset,
+    // Exercise the post-match shell without waiting for the five-minute clock.
+    finishMatch() {
+      match.finish();
+      clearKeys();
+      renderMatchUi();
+      return match.getState();
+    },
     // Rifles other than the equipped one load from the class screen, which
     // automation never opens. Awaiting this is the scripted equivalent.
     loadAllWeapons: () => loadAllWeaponSlots(),
@@ -1739,7 +1982,9 @@ function createDebugApi() {
       return selectWeapon(id);
     },
     setWeaponCamo(name) {
-      return viewmodel.setCamo(String(name)) ? viewmodel.camo : false;
+      const changed = viewmodel.setCamo(String(name));
+      if (changed) refreshTextureFiltering();
+      return changed ? viewmodel.camo : false;
     },
     respawnPlayer() {
       playerHealth?.respawn();
@@ -1778,6 +2023,7 @@ function createDebugApi() {
 }
 
 document.addEventListener('pointerlockchange', () => {
+  if (touchControls.mode && !document.pointerLockElement) return;
   locked = document.pointerLockElement === renderer.domElement;
   document.body.classList.toggle('locked', locked);
   // Counting here rather than in `frontend.enter()` keeps the automation
@@ -1795,34 +2041,35 @@ document.addEventListener('pointerlockchange', () => {
 });
 
 document.addEventListener('mousemove', (event) => {
-  if (!locked) return;
-  yawPitch.setFromQuaternion(camera.quaternion);
-  yawPitch.y -= event.movementX * 0.0022;
-  yawPitch.x -= event.movementY * 0.0022;
-  yawPitch.x = THREE.MathUtils.clamp(yawPitch.x, -Math.PI / 2, Math.PI / 2);
-  camera.quaternion.setFromEuler(yawPitch);
-  viewmodel.addLook(event.movementX, event.movementY);
+  if (!canControlPlayer() || event.sourceCapabilities?.firesTouchEvents) return;
+  applyLook(event.movementX, event.movementY);
 });
 
 document.addEventListener('mousedown', (event) => {
-  if (!locked) return;
-  if (event.button === 0) weapon.setTrigger(true);
-  if (event.button === 2) viewmodel.setAiming(true);
+  if (!canControlPlayer() || event.sourceCapabilities?.firesTouchEvents || event.target.closest('#touch-controls')) return;
+  if (event.button === 0) { mouseFire = true; weapon.setTrigger(true); }
+  if (event.button === 2) { mouseAim = true; viewmodel.setAiming(true); }
 });
 document.addEventListener('mouseup', (event) => {
-  if (event.button === 0) weapon.setTrigger(false);
-  if (event.button === 2) viewmodel.setAiming(false);
+  if (event.sourceCapabilities?.firesTouchEvents) return;
+  if (event.button === 0) { mouseFire = false; weapon.setTrigger(false); }
+  if (event.button === 2) { mouseAim = false; viewmodel.setAiming(false); }
 });
 document.addEventListener('contextmenu', (event) => {
   if (locked) event.preventDefault();
 });
 
 document.addEventListener('keydown', (event) => {
+  if (event.target.matches('input, select, textarea, button')) return;
   keys[event.code] = true;
   if (['Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.code)) {
     event.preventDefault();
   }
   if (event.repeat || !ready) return;
+  if (event.code === 'Escape' && locked && touchControls.mode) {
+    suspendPlay();
+    return;
+  }
   if (event.code === 'Enter' && match.phase === 'ended') {
     restartMatch();
     return;
@@ -1852,7 +2099,7 @@ document.addEventListener('keydown', (event) => {
     setDebugVisibility();
   }
   if (event.code === 'KeyP') showPathToCrosshair();
-  if (event.code === 'KeyK' && locked) viewmodel.cycleCamo();
+  if (event.code === 'KeyK' && locked) { viewmodel.cycleCamo(); refreshTextureFiltering(); }
   if (event.code === 'Tab') {
     scoreboardHeld = true;
     renderMatchUi();
@@ -1865,6 +2112,9 @@ document.addEventListener('keyup', (event) => {
     renderMatchUi();
   }
 });
+addEventListener('blur', () => suspendPlay());
+addEventListener('pagehide', () => suspendPlay());
+document.addEventListener('visibilitychange', () => { if (document.hidden) suspendPlay(); });
 
 async function start() {
   try {
@@ -1944,6 +2194,7 @@ async function start() {
       regenDelay: 4,
       regenPerSecond: 25,
       onDeath: ({ source }) => {
+        clearKeys();
         deathSource = source;
         match.recordKill(combatantId(source), 'player');
         medals?.onDeath();
@@ -1985,6 +2236,7 @@ async function start() {
     ).finally(() => frontend.stage('enemy'));
 
     await Promise.all([viewmodelPromise, weaponEffects.loadAudio(), enemyPromise, loadEnvironment()]);
+    refreshTextureFiltering();
 
     const botNames = ['ADMIRAL', 'CORSAIR', 'DEADEYE', 'MARINER', 'ROGUE', 'VIPER'];
     for (const enemy of enemies?.enemies ?? []) {
@@ -2043,6 +2295,9 @@ async function start() {
       parent.add(warmEnemy.root);
     }
     frontend.stage('shaders');
+    // Prime the post-processing buffers once before deployment. The opaque
+    // frontend covers the canvas, so it does not need a full scene every frame.
+    renderFrame();
 
     // Small read/debug surface for automated smoke tests and map tooling.
     globalThis.hijacked = {
@@ -2067,6 +2322,7 @@ async function start() {
       'K cycle camo · N navmesh · V collision · P path · Esc pause',
       navigation ? '' : 'Navigation failed to load; collision and walking are still available.',
     ]);
+    updateControlHints();
   } catch (error) {
     console.error(error);
     frontend.fail(`Unable to start\n${error instanceof Error ? error.message : error}`);
@@ -2077,17 +2333,24 @@ async function start() {
 function tick() {
   requestAnimationFrame(tick);
   const frameWorkStartedAt = performance.now();
+  if (graphics.observeFrame(frameWorkStartedAt, ready && canControlPlayer() && !document.hidden)) resizeGraphicsBuffer();
   const dt = Math.min(clock.getDelta(), 0.1);
-  const simulationActive = locked && !automationPaused && match.phase === 'playing';
+  const simulationActive = locked && !frontend.visible && !automationPaused &&
+    !(touchControls.mode && scoreboardHeld) && match.phase === 'playing';
+  const controlsActive = canControlPlayer();
+  touchControls.setEnabled(controlsActive, ready && locked && !frontend.visible && !scoreboardHeld && match.phase === 'playing');
+  const touch = touchControls.input.read();
+  const movement = {
+    forward: Number(Boolean(keys.KeyW)) - Number(Boolean(keys.KeyS)) + touch.forward,
+    strafe: Number(Boolean(keys.KeyD)) - Number(Boolean(keys.KeyA)) + touch.strafe,
+    sprint: Boolean(keys.ShiftLeft || keys.ShiftRight || touch.sprint),
+    crouch: Boolean(keys.ControlLeft || keys.ControlRight || keys.KeyC || touch.crouch),
+    jump: Boolean(keys.Space || touch.jump),
+  };
+  weapon.setTrigger(controlsActive && (mouseFire || touch.fire));
+  viewmodel.setAiming(controlsActive && (mouseAim || touch.aim));
   if (player && simulationActive) {
-    player.update(dt, {
-      forward: keys.KeyW,
-      backward: keys.KeyS,
-      strafe: Number(Boolean(keys.KeyD)) - Number(Boolean(keys.KeyA)),
-      sprint: keys.ShiftLeft || keys.ShiftRight,
-      crouch: keys.ControlLeft || keys.ControlRight || keys.KeyC,
-      jump: keys.Space,
-    });
+    player.update(dt, controlsActive ? movement : {});
   }
   if (simulationActive) navigation?.update(1 / 60, dt, 5);
   enemies?.update(dt, { active: simulationActive });
@@ -2100,8 +2363,8 @@ function tick() {
   if (player) {
     const p = player.position;
     const speed = Math.hypot(player.velocity.x, player.velocity.z);
-    const moving = Boolean(keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD);
-    const sprinting = Boolean(keys.ShiftLeft || keys.ShiftRight) && moving;
+    const moving = controlsActive && Math.hypot(movement.forward, movement.strafe) > 0;
+    const sprinting = movement.sprint && moving;
 
     viewmodel.update(dt, {
       speed,
@@ -2177,6 +2440,7 @@ function tick() {
     }
   }
   if (match.phase === 'ended' && !matchEndedHandled) {
+    clearKeys();
     matchEndedHandled = true;
     player?.setEnabled(false);
     weapon.setTrigger(false);
@@ -2205,9 +2469,11 @@ function tick() {
   updateLightProbes(camera.position);
   // The stride bob lives on the camera only for the draw; gameplay reads the
   // steady camera before and after.
-  viewBob.apply(camera);
-  renderFrame();
-  viewBob.restore(camera);
+  if (!frontend.visible) {
+    viewBob.apply(camera);
+    renderFrame();
+    viewBob.restore(camera);
+  }
   if (ready && performance.now() >= frameWorkWarmupUntil) {
     frameWorkSamples[frameWorkSampleIndex] = performance.now() - frameWorkStartedAt;
     frameWorkSampleIndex = (frameWorkSampleIndex + 1) % frameWorkSamples.length;
@@ -2215,8 +2481,8 @@ function tick() {
   }
 }
 
-// With the grade active the world and viewmodel go into an sRGB-encoded target
-// and the LUT pass writes the canvas; without it they draw straight to screen.
+// The world and weapon share the HDR scene target. Grade once, then use FXAA
+// only when the device cannot multisample that target.
 function renderFrame() {
   if (gradeMaterial && gradeTarget) {
     // Kept in sync here because the vision set's exposure is applied
@@ -2226,10 +2492,8 @@ function renderFrame() {
     renderer.clear();
     renderer.render(scene, camera);
     viewmodel.render(renderer);
-    renderer.setRenderTarget(null);
     gradeMaterial.uniforms.tDiffuse.value = gradeTarget.texture;
-    renderer.clear();
-    renderer.render(gradeScene, gradeCamera);
+    graphicsRenderer.render(gradeScene, gradeCamera);
     return;
   }
   renderer.clear();
@@ -2244,27 +2508,21 @@ function renderFrame() {
 // plays all time against 125 GB of bandwidth in the first two days of
 // September. A visit that never starts a match now costs ~2.6 MB, not ~47 MB.
 //
-// Any of these events means someone is on the other end, and a person emits one
-// within a second or so of arriving, so the load still overlaps with reading the
-// title screen. A headless crawler emits none of them.
-const BOOT_EVENTS = ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart'];
-function boot() {
-  for (const type of BOOT_EVENTS) removeEventListener(type, boot);
+// The welcome screen asks for input, and the early script above remembers it
+// even while modules are still downloading. Resolve once across all input types.
+globalThis.hijackedStartup.then(() => {
+  frontend.startLoading();
   start();
-}
-// `browser-smoke.mjs` and `ai-game.mjs` drive the page without ever moving a
-// pointer, so they opt back into loading on sight.
-if (new URLSearchParams(location.search).has('autostart')) boot();
-else for (const type of BOOT_EVENTS) addEventListener(type, boot, { passive: true });
+});
 tick();
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   for (const slot of weaponSlots.values()) slot.viewmodel.setSize(innerWidth, innerHeight);
-  renderer.setPixelRatio(renderPixelRatio());
+  graphics.setViewport(innerWidth, innerHeight, devicePixelRatio, maxRenderSize);
   renderer.setSize(innerWidth, innerHeight);
-  sizeGradeTarget();
+  resizeGraphicsBuffer();
 });
 </script>
 </body>

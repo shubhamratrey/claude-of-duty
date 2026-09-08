@@ -3,12 +3,16 @@ import http from 'node:http';
 import path from 'node:path';
 import process from 'node:process';
 import { chromium } from 'playwright-core';
+import { runMobileStartup, runMobileTest } from './mobile-game.mjs';
+import { runGraphicsTest } from './graphics-game.mjs';
 
 const root = process.cwd();
 const webRoot = path.resolve(root, 'export', 'web');
-const artifactRoot = path.resolve(root, process.env.AI_GAME_ARTIFACT_DIR ?? 'artifacts/ai-game');
-const viewport = { width: 1280, height: 720 };
+const artifactRoot = path.resolve(root, process.env.AI_GAME_ARTIFACT_DIR ??
+  (process.argv[2] === 'mobile-test' ? 'artifacts/ai-mobile' : process.argv[2] === 'graphics-test' ? 'artifacts/ai-graphics' : 'artifacts/ai-game'));
 const command = process.argv[2] ?? 'help';
+const touchContext = ['mobile-test', 'graphics-test'].includes(command) || process.env.AI_GAME_MOBILE === '1';
+const viewport = touchContext ? { width: 844, height: 390 } : { width: 1280, height: 720 };
 const commandArgument = process.argv[3];
 const commandOption = process.argv[4];
 
@@ -27,6 +31,7 @@ const mimeTypes = new Map([
   ['.glb', 'model/gltf-binary'],
   ['.gltf', 'model/gltf+json'],
   ['.html', 'text/html; charset=utf-8'],
+  ['.css', 'text/css; charset=utf-8'],
   ['.js', 'text/javascript; charset=utf-8'],
   ['.json', 'application/json; charset=utf-8'],
   ['.png', 'image/png'],
@@ -43,10 +48,13 @@ Usage:
   npm run ai:game -- test
   npm run ai:game -- enemy-test
   npm run ai:game -- life-test
+  npm run ai:game -- mobile-test
+  npm run ai:game -- graphics-test [fallback]
   npm run ai:game -- record [seconds] [weapon]
 
 Environment:
   AI_GAME_HEADED=1             Show the controlled browser window
+  AI_GAME_MOBILE=1             Use a high-density touch viewport (also for record)
   AI_GAME_ARTIFACT_DIR=<path>  Override artifacts/ai-game
   BROWSER_PATH=<path>          Override Chrome or Edge executable
   BROWSER_TEST_URL=<url>       Use an already-running game server
@@ -127,7 +135,7 @@ async function run() {
     process.stdout.write(usage());
     return;
   }
-  if (!['state', 'screenshot', 'test', 'enemy-test', 'life-test', 'record'].includes(command)) {
+  if (!['state', 'screenshot', 'test', 'enemy-test', 'life-test', 'mobile-test', 'graphics-test', 'record'].includes(command)) {
     throw new Error(`Unknown command: ${command}\n\n${usage()}`);
   }
 
@@ -136,7 +144,8 @@ async function run() {
   await fs.promises.mkdir(artifactRoot, { recursive: true });
 
   const ownedServer = process.env.BROWSER_TEST_URL ? null : await staticServer();
-  const gameUrl = autostartUrl(process.env.BROWSER_TEST_URL ?? ownedServer.url);
+  const baseUrl = process.env.BROWSER_TEST_URL ?? ownedServer.url;
+  const gameUrl = command === 'mobile-test' ? baseUrl : autostartUrl(baseUrl);
   const consoleMessages = [];
   const errors = [];
   const recordSeconds = Math.max(1, Math.min(60, Number(commandArgument) || 5));
@@ -151,6 +160,7 @@ async function run() {
   let result;
   let failure;
   let inputProbe = null;
+  let startupChecks = {};
 
   try {
     browser = await chromium.launch({
@@ -167,12 +177,23 @@ async function run() {
     });
     context = await browser.newContext({
       viewport,
+      ...(touchContext ? { isMobile: true, hasTouch: true, deviceScaleFactor: command === 'mobile-test' ? 1 : 2 } : {}),
       ...(command === 'record' ? { recordVideo: { dir: videoDirectory, size: viewport } } : {}),
     });
-    await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
-    traceStarted = true;
     page = await context.newPage();
     video = page.video();
+    if (touchContext) {
+      await page.route('**/api/plays', route => route.fulfill({ contentType: 'application/json', body: '{"players":1,"plays":1}' }));
+    }
+    if (command === 'graphics-test' && commandArgument === 'fallback') {
+      await page.addInitScript(() => {
+        const original = WebGL2RenderingContext.prototype.getInternalformatParameter;
+        WebGL2RenderingContext.prototype.getInternalformatParameter = function(target, format, pname) {
+          if (format === this.RGBA16F && pname === this.SAMPLES) return new Int32Array();
+          return original.call(this, target, format, pname);
+        };
+      });
+    }
 
     page.on('console', (message) => {
       const entry = `[console:${message.type()}] ${message.text()}`;
@@ -192,8 +213,12 @@ async function run() {
       if (!entry.includes('net::ERR_ABORTED')) errors.push(entry);
     });
 
-    const response = await page.goto(gameUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    if (!response?.ok()) throw new Error(`Game returned HTTP ${response?.status() ?? 'unknown'}`);
+    if (command === 'mobile-test') {
+      startupChecks = await runMobileStartup(page, artifactRoot, gameUrl);
+    } else {
+      const response = await page.goto(gameUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      if (!response?.ok()) throw new Error(`Game returned HTTP ${response?.status() ?? 'unknown'}`);
+    }
     await page.waitForFunction(
       () => globalThis.hijacked?.debug?.getState().ready === true,
       null,
@@ -205,6 +230,11 @@ async function run() {
     // or `screenshot <weapon>` finds only one entry in availableWeapons.
     await page.evaluate(() => globalThis.hijacked.debug.loadAllWeapons());
 
+    // Record the encounter after asset loading; embedding every large binary
+    // transfer adds hundreds of MB and obscures the input/rendering evidence.
+    await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+    traceStarted = true;
+
     await page.evaluate(() => {
       globalThis.hijacked.debug.setActive(true);
       globalThis.hijacked.debug.resume();
@@ -215,7 +245,11 @@ async function run() {
     await writeJson('before-state.json', before);
     await page.screenshot({ path: path.join(artifactRoot, 'before.png') });
 
-    if (command === 'screenshot' && commandArgument) {
+    if (command === 'mobile-test') {
+      inputProbe = await runMobileTest(page, artifactRoot);
+    } else if (command === 'graphics-test') {
+      inputProbe = await runGraphicsTest(page, artifactRoot, commandArgument === 'fallback');
+    } else if (command === 'screenshot' && commandArgument) {
       const options = await page.evaluate(() => globalThis.hijacked.debug.getState().weapon);
       if (options.availableWeapons.includes(commandArgument)) {
         const selected = await page.evaluate(
@@ -240,7 +274,12 @@ async function run() {
     } else if (command === 'test') {
       await page.evaluate(() => globalThis.hijacked.debug.resume());
       await page.keyboard.down('w');
-      await page.waitForTimeout(900);
+      // Wall time can contain only a handful of frames under SwiftShader.
+      // Keep real keyboard input held until the physics has actually moved.
+      await page.waitForFunction((origin) => {
+        const feet = globalThis.hijacked.debug.getState().player.feet;
+        return Math.hypot(...feet.map((value, i) => value - origin[i])) > 20;
+      }, before.player.feet, { timeout: 20000 });
       await page.keyboard.up('w');
       await page.evaluate(() => {
         globalThis.__aiMouseProbe = [];
@@ -330,7 +369,11 @@ async function run() {
     await writeJson('state.json', state);
     await page.screenshot({ path: path.join(artifactRoot, 'screenshot.png') });
 
-    const checks = command === 'test' ? {
+    const checks = ['mobile-test', 'graphics-test'].includes(command) ? {
+      ...startupChecks,
+      ...inputProbe.checks,
+      noBrowserErrors: errors.length === 0,
+    } : command === 'test' ? {
       ready: state.ready === true,
       playerMoved: distance(before.player.feet, state.player.feet) > 10,
       weaponFired: state.weapon.fireCount > before.weapon.fireCount,
@@ -376,6 +419,11 @@ async function run() {
   } catch (error) {
     failure = error;
     errors.push(`[harness] ${error.stack ?? error.message}`);
+    if (page && !page.isClosed()) {
+      const failedState = await page.evaluate(() => globalThis.hijacked?.debug?.getState()).catch(() => null);
+      if (failedState) await writeJson('failure-state.json', failedState);
+      await page.screenshot({ path: path.join(artifactRoot, 'failure.png'), timeout: 10000 }).catch(() => {});
+    }
     result = { command, passed: false, errors, artifacts: artifactRoot };
     await writeJson('report.json', result);
   } finally {

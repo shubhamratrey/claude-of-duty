@@ -2,6 +2,23 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Frontend, SCREENS } from '../export/web/frontend.js';
 
+test('a deferred load shows welcome until requested, without allowing play', () => {
+  const frontend = new Frontend({ waitingForInput: true });
+  frontend.expect({ map: 1 });
+  assert.equal(frontend.getState().screen, 'welcome');
+  assert.equal(frontend.getState().caption, '');
+  assert.equal(frontend.play(), false);
+  assert.equal(frontend.startLoading(), true);
+  assert.equal(frontend.getState().screen, 'loading');
+  assert.equal(frontend.getState().caption, 'map geometry');
+  assert.equal(frontend.startLoading(), false, 'repeated input cannot restart loading');
+  frontend.setReady();
+  assert.equal(frontend.startLoading(), false, 'late input cannot reopen loading');
+  assert.equal(frontend.play(), true);
+  frontend.fail('Failed to load');
+  assert.equal(frontend.startLoading(), false, 'input cannot erase an error');
+});
+
 test('frontend exposes the class screen and keeps its selected rifle across routes', () => {
   const selected = [];
   const frontend = new Frontend({
