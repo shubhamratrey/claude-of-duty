@@ -177,6 +177,19 @@ Expect internet latency to land on the victim rather than the shooter. You hit
 what you see; your friends occasionally die after they thought they had reached
 cover. That is the trade this netcode makes, not a bug.
 
+### Names over heads
+
+Every body you can actually see carries its name: people in the accent colour,
+bots muted, so you can tell a person from a bot at a glance. Plates fade with
+distance and vanish past about 3000 units.
+
+They respect line of sight. A name readable through a bulkhead is a wallhack,
+so each body is raycast against the collision mesh before its plate is drawn --
+staggered a couple per frame and cached, because `enemy-system.js` is right that
+full-map raycasts are too expensive to do thirteen of every frame. A plate can
+therefore linger about a tenth of a second after someone steps behind cover,
+which is imperceptible; doing it properly every frame would not be.
+
 ### A host that stops hosting
 
 A slow host does not slow anyone else's game: guests keep their own frame rate,
