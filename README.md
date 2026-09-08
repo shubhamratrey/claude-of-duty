@@ -127,7 +127,14 @@ that already shipped. Bodies render 100 ms in the past, interpolated between
 real snapshots, which at LAN latency looks exact.
 
 If the host closes their tab, the next-oldest player is promoted and the match
-continues; expect a brief hitch while the navmesh crowd re-initialises.
+continues. Everyone else keeps playing: the departed player's body and
+scoreboard row are removed, scores are preserved, and the new host picks the
+bots up from where they were replicated rather than snapping them to stale
+navmesh agents. Expect a brief hitch as it takes over. If that player leaves
+too, the next one is promoted, and so on.
+
+A player who leaves keeps their entries in the kill feed -- that is a record of
+what happened -- but drops off the standings, which list who is still playing.
 
 ### One slow machine cannot slow the room
 
@@ -141,8 +148,17 @@ hopelessly behind is disconnected and left to reconnect cleanly.
 
 `npm run ai:lan` boots the real server, opens two independent browsers, joins
 both, stands them face to face, and asserts that each sees the other, that
-damage crosses the wire, that the kill is scored, and that both scoreboards
-agree. Artifacts land in `artifacts/ai-lan`.
+damage crosses the wire, that the kill is scored, that both scoreboards agree,
+and that closing the host promotes the survivor with the bots still running.
+Artifacts land in `artifacts/ai-lan`.
+
+`npm run ai:lan3` runs the three-player case. It exists because a bystander --
+the player who was neither the host nor the one promoted -- is where migration
+actually breaks, and this caught a real bug: the server announces a departure
+before it announces the new host, so the peer about to be promoted saw the old
+host leave while still a guest, skipped dropping its combatant, and then
+published a scoreboard that kept the departed player for the rest of the
+match.
 
 ## Frontend
 

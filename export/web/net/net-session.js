@@ -117,7 +117,16 @@ export class NetSession {
     });
     client.on(MSG.PEER_LEFT, (data) => {
       this.remotePlayers?.remove(data.peerId);
-      if (this.isHost) this.game.unregisterCombatant?.(data.peerId);
+      // Every client drops the combatant, not just the host.
+      //
+      // The server announces the departure before it announces the new host,
+      // so when the HOST is the one who left, this arrives while the peer
+      // about to be promoted is still a guest. Gating on isHost here meant the
+      // promoted client republished a scoreboard that still contained the
+      // player who had just quit, and that row then survived the rest of the
+      // match. A guest's scoreboard is overwritten by the next matchState
+      // anyway, so doing this unconditionally costs nothing.
+      this.game.unregisterCombatant?.(data.peerId);
     });
 
     client.on(MSG.PLAYER_STATE, (data, from) => {
@@ -190,8 +199,25 @@ export class NetSession {
     const host = this.isHost;
     if (host !== this.wasHost) {
       this.wasHost = host;
+      if (host) this.reconcileRoster();
       this.game.onRoleChanged?.(host ? 'host' : 'guest');
     }
+  }
+
+  /**
+   * Make the scoreboard match who is actually connected.
+   *
+   * Run on promotion, because the new host inherits a mirrored scoreboard that
+   * may name people who have already gone -- including, always, the host it is
+   * replacing. From this moment it is the one publishing that scoreboard to
+   * everyone, so it has to be right. Bots are left alone: they are not peers,
+   * and the host owns them regardless of who is connected.
+   */
+  reconcileRoster() {
+    const present = new Set((this.client.getState().peers ?? []).map((peer) => peer.id));
+    present.add(this.localCombatantId);
+    this.game.reconcileCombatants?.([...present]);
+    this.broadcastMatch(true);
   }
 
   send(type, data) {

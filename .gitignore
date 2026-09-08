@@ -55,6 +55,7 @@
 !/.tools/mobile-game.mjs
 !/.tools/graphics-game.mjs
 !/.tools/lan-game.mjs
+!/.tools/lan-migration.mjs
 !/export/
 !/export/web/
 !/export/web/**

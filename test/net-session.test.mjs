@@ -88,6 +88,7 @@ function makeSession({ peerId = 'peer-1', hostId = 'peer-1', game = {} } = {}) {
     onRoleChanged: record('onRoleChanged'),
     registerCombatant: record('registerCombatant'),
     unregisterCombatant: record('unregisterCombatant'),
+    reconcileCombatants: record('reconcileCombatants'),
     chooseSpawnFor: () => ({ position: { x: 5, y: 0, z: 5 }, yaw: 1 }),
     ...game,
   };
@@ -239,6 +240,40 @@ test('a departing peer loses its body, and the host drops its score', () => {
   host.client.emit(MSG.PEER_LEFT, { peerId: 'peer-2' });
   assert.ok(!host.session.remotePlayers.has('peer-2'));
   assert.deepEqual(host.named('unregisterCombatant')[0].args, ['peer-2']);
+});
+
+test('a departing peer is dropped by every client, not only the host', () => {
+  // The server announces the departure before the new host, so a peer about to
+  // be promoted sees this while still a guest. Gating on isHost here left the
+  // departed host on the scoreboard for the rest of the match.
+  const guest = makeSession({ peerId: 'peer-2', hostId: 'peer-1' });
+  guest.client.emit(MSG.PEER_LEFT, { peerId: 'peer-1' });
+  assert.deepEqual(guest.named('unregisterCombatant')[0].args, ['peer-1']);
+});
+
+test('promotion reconciles the scoreboard against who is actually connected', () => {
+  const { session, client, named } = makeSession({ peerId: 'peer-2', hostId: 'peer-1' });
+  client.getState = () => ({
+    connected: true, peerId: 'peer-2', hostId: 'peer-2', rttMs: 1,
+    peers: [{ id: 'peer-2', name: 'B' }, { id: 'peer-3', name: 'C' }],
+  });
+  client.hostId = 'peer-2';
+  client.emit(MSG.HOST_CHANGED, { hostId: 'peer-2' });
+
+  const reconciled = named('reconcileCombatants');
+  assert.equal(reconciled.length, 1, 'reconciles exactly once on promotion');
+  const present = reconciled[0].args[0];
+  assert.ok(present.includes('peer-2'));
+  assert.ok(present.includes('peer-3'));
+  assert.ok(!present.includes('peer-1'), 'the host that left is not present');
+  assert.equal(session.isHost, true);
+});
+
+test('a guest is never asked to reconcile the scoreboard it does not own', () => {
+  const { client, named } = makeSession({ peerId: 'peer-3', hostId: 'peer-1' });
+  client.hostId = 'peer-2';
+  client.emit(MSG.HOST_CHANGED, { hostId: 'peer-2' });
+  assert.equal(named('reconcileCombatants').length, 0);
 });
 
 test('remote fire is forwarded for effects but never self-echoed', () => {

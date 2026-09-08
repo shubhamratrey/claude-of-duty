@@ -2562,6 +2562,20 @@ async function startLanSession() {
         renderMatchUi();
       },
 
+      // Drop any person on the scoreboard who is no longer connected. Bots are
+      // never touched: they are not peers, and the host owns them whoever is
+      // in the room.
+      reconcileCombatants(presentIds) {
+        const present = new Set(presentIds);
+        let changed = false;
+        for (const entry of match.getState().standings) {
+          if (!entry.human || present.has(entry.id)) continue;
+          match.unregister(entry.id);
+          changed = true;
+        }
+        if (changed) renderMatchUi();
+      },
+
       onRoleChanged(role) {
         // Taking over the bots.
         //
