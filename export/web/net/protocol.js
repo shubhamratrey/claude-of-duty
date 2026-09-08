@@ -19,12 +19,16 @@ export const SERVER_MESSAGES = Object.freeze({
   HOST_CHANGED: 'hostChanged',
   PONG: 'pong',
   ERROR: 'error',
+  // A relay holds one room at a time. This says somebody is already in it, so
+  // the code is needed; the LAN server never sends it.
+  ROOM_REQUIRED: 'roomRequired',
 });
 
 /** Client-authored message types. The server relays these unread. */
 export const CLIENT_MESSAGES = Object.freeze({
   HELLO: 'hello',
   PING: 'ping',
+  JOIN_ROOM: 'joinRoom',
   PLAYER_STATE: 'playerState',
   BOT_STATE: 'botState',
   MATCH_STATE: 'matchState',
@@ -56,6 +60,29 @@ export const POSE = Object.freeze(['idle', 'run', 'death']);
 
 /** Hitbox names carried on `hit`, mirroring Enemy.hitboxes. */
 export const HITBOX = Object.freeze(['torso', 'head', 'legs']);
+
+/**
+ * Room-code alphabet: 32 symbols with I, O, 0 and 1 removed.
+ *
+ * Codes get read out over voice chat, and those four are the pairs people
+ * mishear and mistype. Four characters gives 1,048,576 combinations, which is
+ * ample when a relay holds one room at a time.
+ */
+export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+export const ROOM_CODE_LENGTH = 4;
+
+const ROOM_CODE_PATTERN = new RegExp(`^[${ROOM_CODE_ALPHABET}]{${ROOM_CODE_LENGTH}}$`);
+
+/** Fold typed input toward the alphabet: trim, uppercase, drop separators. */
+export const normalizeRoomCode = (value) => String(value ?? '')
+  .toUpperCase()
+  .replace(new RegExp(`[^${ROOM_CODE_ALPHABET}]`, 'g'), '')
+  .slice(0, ROOM_CODE_LENGTH);
+
+export const isRoomCode = (value) => typeof value === 'string' && ROOM_CODE_PATTERN.test(value);
+
+/** Reasons a relay refuses admission. */
+export const JOIN_ERRORS = Object.freeze(['bad-code', 'room-full', 'no-room', 'relay-full']);
 
 // Sanity bounds. These catch honest bugs and desyncs, not adversaries: on a
 // LAN among friends the threat model is a stale build, not a cheater.
@@ -125,16 +152,22 @@ export const sanitizeName = (value, fallback = 'PLAYER') => {
 // Per-type validators. Each returns true only when every field the readers
 // depend on is present and in range, so consumers never defend themselves.
 const VALIDATORS = {
+  // roomCode is present only from a relay; the LAN server omits it entirely,
+  // so its absence must stay valid or the LAN path breaks.
   [MSG.WELCOME]: (d) => isId(d.peerId) && (d.hostId === null || isId(d.hostId)) &&
-    Array.isArray(d.roster) && isFiniteNumber(d.serverTime),
+    Array.isArray(d.roster) && isFiniteNumber(d.serverTime) &&
+    (d.roomCode === undefined || d.roomCode === null || isRoomCode(d.roomCode)),
   [MSG.PEER_JOINED]: (d) => Boolean(d.peer) && isId(d.peer.id),
   [MSG.PEER_LEFT]: (d) => isId(d.peerId),
   [MSG.HOST_CHANGED]: (d) => d.hostId === null || isId(d.hostId),
   [MSG.PONG]: (d) => isFiniteNumber(d.clientTime) && isFiniteNumber(d.serverTime),
-  [MSG.ERROR]: (d) => typeof d.message === 'string',
+  [MSG.ERROR]: (d) => typeof d.message === 'string' &&
+    (d.reason === undefined || typeof d.reason === 'string'),
+  [MSG.ROOM_REQUIRED]: () => true,
 
   [MSG.HELLO]: (d) => typeof d.name === 'string',
   [MSG.PING]: (d) => isFiniteNumber(d.clientTime),
+  [MSG.JOIN_ROOM]: (d) => isRoomCode(d.code) && typeof d.name === 'string',
 
   [MSG.PLAYER_STATE]: (d) => Number.isInteger(d.seq) && isFiniteNumber(d.t) &&
     isVec3(d.pos) && isAngle(d.yaw) && isAngle(d.pitch) &&
@@ -212,6 +245,7 @@ export default {
   PROTOCOL_VERSION, MSG, SERVER_MESSAGES, CLIENT_MESSAGES, HOST_ONLY,
   FLAG, POSE, HITBOX, LIMITS,
   encode, decode, validate,
+  ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, normalizeRoomCode, isRoomCode, JOIN_ERRORS,
   packVec3, packFlags, unpackFlags, roundCoordinate, roundAngle, sanitizeName,
   peerCombatantId, botCombatantId, isBotId,
 };

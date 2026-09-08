@@ -141,6 +141,42 @@ too, the next one is promoted, and so on.
 A player who leaves keeps their entries in the kill feed -- that is a record of
 what happened -- but drops off the standings, which list who is still playing.
 
+### Playing with people who are not on your WiFi
+
+`npm run relay` starts a relay: sockets only, no game assets, and it terminates
+no TLS of its own. Put a tunnel in front and share the URL it prints:
+
+```powershell
+npm run relay
+cloudflared tunnel --url http://localhost:8787
+```
+
+Players paste that address into the **Relay** tab of the multiplayer panel. The
+first to arrive opens the room and is shown a four-character code; everyone else
+is told a game is already running and types the code. Paste anything —
+`https://…`, `http://…`, `wss://…`, `ws://…`, or a bare host — and it is
+normalised for you.
+
+The relay does not serve the game, so players still load the page from
+somewhere: the public site, your own static host, or a local `npm run lan`. One
+browser rule decides which relay addresses will work for them: **a page served
+over HTTPS can only reach a `wss://` relay.** The game checks this before
+opening the socket and says so, because the browser itself fails silently.
+
+The code is a join secret, not an address — a relay holds one room at a time.
+The room lives only while someone is in it; when the last player leaves it is
+destroyed and the next arrival opens a fresh one with a new code.
+
+**Two things to know before exposing a relay.** Whoever connects first owns it,
+so a stranger who finds the URL while it is empty can occupy it and stop you
+creating a game — which is why an unguessable tunnel hostname matters more than
+it looks. And damage stays shooter-reported, so anyone in the room is trusted
+about the shots they claim. Both are fine among friends and wrong for strangers.
+
+Expect internet latency to land on the victim rather than the shooter. You hit
+what you see; your friends occasionally die after they thought they had reached
+cover. That is the trade this netcode makes, not a bug.
+
 ### A host that stops hosting
 
 A slow host does not slow anyone else's game: guests keep their own frame rate,
@@ -182,6 +218,10 @@ both, stands them face to face, and asserts that each sees the other, that
 damage crosses the wire, that the kill is scored, that both scoreboards agree,
 and that closing the host promotes the survivor with the bots still running.
 Artifacts land in `artifacts/ai-lan`.
+
+`npm run ai:relay` covers the relay: a page server and a relay on separate
+origins, two browsers, one opening a room and the other joining by code, with a
+wrong code refused in between.
 
 `npm run ai:lan3` runs the three-player case. It exists because a bystander --
 the player who was neither the host nor the one promoted -- is where migration

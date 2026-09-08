@@ -261,7 +261,8 @@ test('getState is compact and survives a JSON round-trip', () => {
   const state = net.client.getState();
   assert.deepEqual(JSON.parse(JSON.stringify(state)), state);
   assert.deepEqual(Object.keys(state).sort(), [
-    'connected', 'droppedFrames', 'droppedOutbound', 'hostId', 'peerId', 'peers', 'rttMs', 'role',
+    'connected', 'droppedFrames', 'droppedOutbound', 'hostId', 'peerId', 'peers',
+    'roomCode', 'roomRequired', 'rttMs', 'role',
   ].sort());
   assert.equal(state.connected, true);
   assert.equal(state.role, 'guest');

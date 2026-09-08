@@ -56,6 +56,7 @@
 !/.tools/graphics-game.mjs
 !/.tools/lan-game.mjs
 !/.tools/lan-migration.mjs
+!/.tools/relay-game.mjs
 !/export/
 !/export/web/
 !/export/web/**
