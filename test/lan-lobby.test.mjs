@@ -312,6 +312,37 @@ test('the panel swallows its own clicks so reaching for it cannot deploy you', (
   assert.equal(stopped, true);
 });
 
+test('a shell action carries its value, not just its name', () => {
+  // The generic forward used to drop the second argument, so every relay
+  // control reached the game with an undefined value: the mode button did
+  // nothing and the URL field cleared what had just been pasted. Only
+  // `lan-name` worked, because it is special-cased above the fallthrough.
+  const seen = [];
+  const frontend = new Frontend({
+    storage: null,
+    elements: { onAction: (name, value) => seen.push([name, value]) },
+  });
+
+  frontend.action('net-mode', 'relay');
+  frontend.action('relay-url', 'https://relay.example.com');
+  frontend.action('relay-code', 'K7M2');
+  assert.deepEqual(seen, [
+    ['net-mode', 'relay'],
+    ['relay-url', 'https://relay.example.com'],
+    ['relay-code', 'K7M2'],
+  ]);
+});
+
+test('an action with no value still forwards cleanly', () => {
+  const seen = [];
+  const frontend = new Frontend({
+    storage: null,
+    elements: { onAction: (name, value) => seen.push([name, value]) },
+  });
+  frontend.action('respawn');
+  assert.deepEqual(seen, [['respawn', undefined]]);
+});
+
 test('the lobby state machine works with no DOM at all', () => {
   const frontend = new Frontend({ storage: null });
   frontend.setLanState({ status: 'connected', peerId: 'p1', hostId: 'p2', peers: [{ id: 'p1' }] });
