@@ -74,18 +74,34 @@ export async function runRelayTest() {
       await page.waitForFunction(
         () => globalThis.hijacked?.debug?.getState?.().ready === true,
         undefined, { timeout: READY_TIMEOUT });
-      await page.evaluate(() => globalThis.hijacked.debug.setActive(true));
+      // Raise the shell so the panel is on screen and clickable. The relay
+      // controls are only reachable from the title or pause screens.
+      await page.evaluate(() => globalThis.hijacked.debug.showMenu(true));
       pages.push({ label, context, page });
       process.stdout.write(`  ${label}: loaded\n`);
     }
     const [host, guest] = pages;
 
-    // Paste the relay address, exactly as a player would.
-    const paste = (page, url) => page.evaluate((value) => {
-      globalThis.hijacked.frontend.setRelayUrl(value);
-      globalThis.hijacked.frontend.setLanState({ mode: 'relay' });
-      return globalThis.hijacked.debug.restartNetSession();
-    }, url);
+    // Drive the real controls, not the API behind them.
+    //
+    // An earlier version of this called setRelayUrl() and restartNetSession()
+    // directly and passed while the panel was completely inert: the shell was
+    // dropping the value from every action it forwarded, so the mode button did
+    // nothing. Clicking what a player clicks is the only version of this test
+    // that means anything.
+    const paste = async (page, url) => {
+      const panel = page.locator('.fe-lan');
+      await panel.waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('.fe-lan-mode[data-mode="relay"]').click();
+      await page.waitForFunction(
+        () => globalThis.hijacked.frontend.getLanState().mode === 'relay',
+        undefined, { timeout: 5000 });
+      const field = page.locator('#fe-relay-url');
+      await field.fill(url);
+      // The field commits on change, which is what a real blur produces.
+      await field.press('Enter');
+      await field.blur();
+    };
 
     await paste(host.page, relay.url);
     await host.page.waitForFunction(
@@ -105,16 +121,25 @@ export async function runRelayTest() {
     check('secondPlayerIsNotGivenACodeOfItsOwn', !beforeJoin.net.roomCode,
       String(beforeJoin.net.roomCode));
 
-    // A wrong code must be refused without dropping the connection.
+    // A wrong code must be refused without dropping the connection. Typed into
+    // the real field, which auto-submits on the fourth character.
     const wrong = code === 'ZZZZ' ? 'YYYY' : 'ZZZZ';
-    await guest.page.evaluate((value) => globalThis.hijacked.net.client.joinRoom(value), wrong);
+    const codeField = guest.page.locator('#fe-relay-code');
+    await codeField.waitFor({ state: 'visible', timeout: 15000 });
+    await codeField.fill(wrong);
+    await codeField.press('Enter');
     await settle(guest.page, 30);
     const refused = await state(guest.page);
     check('aWrongCodeIsRefused', !refused.net.roomCode, String(refused.net.roomCode));
     check('aWrongCodeKeepsTheConnection', refused.net.connected === true);
 
+    check('aWrongCodeIsReportedInThePanel',
+      Boolean((await guest.page.evaluate(() => globalThis.hijacked.frontend.getLanState().joinError))),
+      'the panel should say why');
+
     // The right code lets them in.
-    await guest.page.evaluate((value) => globalThis.hijacked.net.client.joinRoom(value), code);
+    await codeField.fill(code);
+    await codeField.press('Enter');
     await guest.page.waitForFunction(
       () => Boolean(globalThis.hijacked.debug.getState().net?.roomCode),
       undefined, { timeout: 30000 });
@@ -125,6 +150,12 @@ export async function runRelayTest() {
       (await state(host.page)).net.role === 'host' && joined.net.role === 'guest');
 
     // And then it is an ordinary match.
+    for (const { page } of pages) {
+      await page.evaluate(() => {
+        globalThis.hijacked.debug.showMenu(false);
+        globalThis.hijacked.debug.setActive(true);
+      });
+    }
     for (const { label, page } of pages) {
       await page.waitForFunction(
         () => (globalThis.hijacked.debug.getState().net?.remoteBodies?.length ?? 0) >= 1,

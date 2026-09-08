@@ -835,7 +835,10 @@ export class Frontend {
       if (next !== previous) this.elements?.onAction?.(name, next);
       return next;
     }
-    return this.elements?.onAction?.(name);
+    // Forward the value too. Dropping it silently broke every control that
+    // carries one -- the relay mode button did nothing, and the relay URL
+    // field cleared what had just been pasted.
+    return this.elements?.onAction?.(name, value);
   }
 
   render() {
