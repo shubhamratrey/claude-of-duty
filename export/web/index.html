@@ -653,7 +653,8 @@ import { GraphicsSettings, filterTextures } from './graphics-settings.js';
 import { GraphicsRenderer } from './graphics-renderer.js';
 import { PlayCounter } from './play-counter.js';
 import { NetSession } from './net/net-session.js';
-import { packFlags, packVec3 } from './net/protocol.js';
+import { packFlags, packVec3, MSG } from './net/protocol.js';
+import { parseRelayUrl } from './net/relay-url.js';
 import { RemoteBots } from './net/remote-players.js';
 import { loadCollisionWorld } from './collision-world.js';
 import { optimizeStaticScene } from './scene-optimizer.js';
@@ -1699,6 +1700,23 @@ function menuAction(name, value) {
     netSession?.setName?.(value);
     return;
   }
+  if (name === 'net-mode') {
+    frontend.setLanState?.({ mode: value });
+    restartLanSession();
+    return;
+  }
+  if (name === 'relay-url') {
+    const previous = frontend.getRelayUrl?.();
+    frontend.setRelayUrl?.(value);
+    frontend.setLanState?.({ mode: value ? 'relay' : 'lan' });
+    if (value !== previous) restartLanSession();
+    return;
+  }
+  if (name === 'relay-code') {
+    frontend.setLanState?.({ joinError: '' });
+    netSession?.client?.joinRoom?.(value);
+    return;
+  }
   if (name === 'respawn') {
     if (playerHealth) playerHealth.respawn();
     else player?.respawn();
@@ -2063,6 +2081,10 @@ function createDebugApi() {
       playerHealth?.respawn();
       return getDebugState().player;
     },
+    /** Re-dial whatever the panel now points at, without reloading the page. */
+    restartNetSession() {
+      return restartLanSession();
+    },
     fireOnce() {
       if (!ready || !viewmodel.ready) return false;
       fireShot({ triggerShotCount: 1 });
@@ -2395,7 +2417,7 @@ async function start() {
     globalThis.hijacked = {
       scene, camera, renderer, player, navigation, collisionRoot, collisionWorld, hints, viewmodel,
       weapon, weaponEffects, playerHealth, enemies, reloadWeapon, selectWeapon, frontend,
-      net: netSession,
+      get net() { return netSession; },
       lighting: {
         lightProbe, viewmodelProbe, enemyProbes, sceneSH,
         get probeVolume() { return probeVolume; },
@@ -2446,6 +2468,23 @@ function lanSocketUrl() {
   return `${scheme}://${location.host}/net`;
 }
 
+/**
+ * Where this client should connect, and how.
+ *
+ * Two deliberate modes. LAN is the zero-config same-origin path and is
+ * unchanged. Relay is an explicit address the player pasted, which also means
+ * the private-address gate does not apply -- pasting a URL is a decision, and
+ * the page may well have been served from the public HTTPS site.
+ */
+function resolveTarget() {
+  if (frontend.getLanState?.().mode !== 'relay') {
+    return { mode: 'lan', socketUrl: lanSocketUrl(), healthUrl: 'net/health' };
+  }
+  const parsed = parseRelayUrl(frontend.getRelayUrl?.() ?? '', location.protocol);
+  if (!parsed.ok) return { mode: 'relay', error: parsed.error };
+  return { mode: 'relay', socketUrl: parsed.socketUrl, healthUrl: parsed.healthUrl };
+}
+
 function refreshLanPanel(status) {
   const net = netSession?.getState?.();
   frontend.setLanState?.({
@@ -2454,6 +2493,8 @@ function refreshLanPanel(status) {
     hostId: net?.hostId ?? null,
     peers: net?.peers ?? [],
     url: lanJoinUrl ?? location.origin,
+    roomCode: net?.roomCode ?? null,
+    roomRequired: Boolean(net?.roomRequired),
   });
 }
 
@@ -2465,11 +2506,12 @@ function refreshLanPanel(status) {
  * error on every retry for the whole session -- which is both noise and, by
  * the project's own test rules, a failure.
  */
-async function lanServerPresent() {
+async function lanServerPresent(healthUrl = 'net/health', relay = false) {
   try {
-    const response = await fetch('net/health', { cache: 'no-store' });
+    const response = await fetch(healthUrl, { cache: 'no-store' });
     if (!response.ok) return false;
     const info = await response.json();
+    if (relay) return info?.relay === true;
     if (info?.lan !== true) return false;
     // The address to read out to the room comes from the server, because a
     // player sitting at the host machine sees location.origin as localhost --
@@ -2482,12 +2524,29 @@ async function lanServerPresent() {
 }
 
 async function startLanSession() {
-  if (!lanEligible || !(await lanServerPresent())) {
+  const target = resolveTarget();
+  if (target.error) {
+    frontend.setLanState?.({ status: 'error', error: target.error, roomCode: null });
+    return null;
+  }
+  const relay = target.mode === 'relay';
+  // The private-address gate is a LAN-only guard: it stops the public
+  // deployment retrying a socket against the CDN. A pasted relay address is a
+  // deliberate act, so it bypasses that entirely.
+  if (!relay && !lanEligible) {
     frontend.setLanState?.({ status: 'offline', url: lanJoinUrl ?? location.origin });
     return null;
   }
+  if (!(await lanServerPresent(target.healthUrl, relay))) {
+    frontend.setLanState?.({
+      status: relay ? 'error' : 'offline',
+      error: relay ? 'No relay answered at that address.' : '',
+      url: lanJoinUrl ?? location.origin,
+    });
+    return null;
+  }
   const session = new NetSession({
-    url: lanSocketUrl(),
+    url: target.socketUrl,
     name: frontend.getLanName?.() || 'PLAYER',
     game: {
       getLocalPlayerState() {
@@ -2609,9 +2668,41 @@ async function startLanSession() {
   session.client.on('close', () => refreshLanPanel('connecting'));
   session.client.on('error', () => refreshLanPanel('error'));
   session.client.on('statechange', () => refreshLanPanel());
+  // A relay saying a game is already running here, so the code is wanted.
+  session.client.on(MSG.ROOM_REQUIRED, () => {
+    frontend.setLanState?.({ status: 'connected', roomRequired: true, roomCode: null, joinError: '' });
+  });
+  // A refusal from the relay, distinct from a socket failure -- a wrong code
+  // leaves the connection up so the player can simply retype it.
+  session.client.on('serverError', (data) => {
+    frontend.setLanState?.({ joinError: data?.message ?? 'The relay refused that.' });
+  });
+  session.client.on(MSG.WELCOME, () => {
+    frontend.setLanState?.({ roomRequired: false, joinError: '' });
+    refreshLanPanel('connected');
+  });
   refreshLanPanel('connecting');
   session.connect();
   return session;
+}
+
+/** Tear down the current session and dial whatever the panel now points at. */
+function restartLanSession() {
+  netSession?.close?.();
+  netSession = null;
+  remoteBots = null;
+  frontend.setLanState?.({ roomCode: null, roomRequired: false, joinError: '' });
+  return startLanSession().then((session) => {
+    netSession = session;
+    // The rig already exists on a mid-game switch, so re-attach immediately;
+    // on a switch made while still loading, the boot path attaches instead.
+    if (session && enemies) {
+      remoteBots = new RemoteBots({ enemies });
+      session.attach(enemies);
+    }
+    refreshLanPanel();
+    return session;
+  });
 }
 
 // Kicked off without awaiting: the lobby fills in when the probe answers, and

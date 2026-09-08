@@ -323,6 +323,11 @@ test('the lobby state machine works with no DOM at all', () => {
     error: '',
     name: 'PLAYER',
     peers: [{ id: 'p1', name: 'P1', host: false, self: true, tag: 'you' }],
+    mode: 'lan',
+    relayUrl: '',
+    roomCode: null,
+    roomRequired: false,
+    joinError: '',
   });
   assert.deepEqual(frontend.getState().lan, { status: 'connected', name: 'PLAYER', peers: 1 });
 });

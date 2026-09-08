@@ -11,7 +11,9 @@
  * node; `elements` is optional and every write goes through `render()`.
  */
 
-import { sanitizeName, LIMITS } from './net/protocol.js';
+import {
+  sanitizeName, LIMITS, ROOM_CODE_LENGTH, normalizeRoomCode,
+} from './net/protocol.js';
 
 // Loader labels are internal asset names; the caption shows something a
 // player can read. Unmapped labels fall through unchanged.
@@ -44,6 +46,10 @@ export const LAN_STATUSES = ['offline', 'connecting', 'connected', 'error'];
 
 // Same `hijacked.` prefix as `hijacked.graphics` and `hijacked.touchSensitivity`.
 export const LAN_NAME_KEY = 'hijacked.lanName';
+export const RELAY_URL_KEY = 'hijacked.relayUrl';
+
+/** LAN is the zero-config same-WiFi path; relay is a pasted address. */
+export const NET_MODES = ['lan', 'relay'];
 
 // Touching the property throws outright in a sandboxed frame, so the access is
 // guarded as well as the calls -- index.html does the same for PlayCounter.
@@ -69,6 +75,36 @@ const lanPeers = (peers) => {
 };
 
 const LAN_CSS = `
+.fe-lan-modes { display: flex; gap: 6px; }
+.fe-lan-mode {
+  flex: 1; padding: 5px 8px; font: inherit; font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--fe-ui, #cfe2f2); cursor: pointer;
+  background: rgba(10, 20, 28, .55); border: 1px solid rgba(139, 173, 198, .22);
+}
+.fe-lan-mode[data-on="true"] {
+  color: #061019; background: var(--fe-accent, #7fffc4);
+  border-color: var(--fe-accent, #7fffc4);
+}
+.fe-lan-relay { display: none; flex-direction: column; gap: 9px; }
+.fe-lan-relay[data-visible="true"] { display: flex; }
+.fe-lan-code { display: none; flex-direction: column; gap: 2px; align-items: center;
+  padding: 8px 0; border: 1px dashed rgba(139, 173, 198, .3); }
+.fe-lan-code[data-visible="true"] { display: flex; }
+.fe-lan-code-label { font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+  opacity: .68; }
+.fe-lan-code-value { font-size: 30px; letter-spacing: .34em; line-height: 1.1;
+  color: var(--fe-accent, #7fffc4); font-variant-numeric: tabular-nums; }
+.fe-lan-join { display: none; align-items: center; gap: 8px; }
+.fe-lan-join[data-visible="true"] { display: flex; }
+.fe-lan-code-input { text-transform: uppercase; letter-spacing: .3em; max-width: 9ch; }
+.fe-lan-join-button {
+  padding: 5px 12px; font: inherit; font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; cursor: pointer; color: #061019;
+  background: var(--fe-accent, #7fffc4); border: 0;
+}
+.fe-lan-error { display: none; margin: 0; font-size: 11px; color: #ff8a7a; }
+.fe-lan-error[data-visible="true"] { display: block; }
+
 .fe-lan {
   display: none; flex-direction: column; gap: 9px; width: min(430px, 92vw);
   padding: 12px 14px; text-align: left; background: rgba(6, 13, 18, .52);
@@ -145,8 +181,16 @@ export class Frontend {
     // setLanState() -- no server, or the network layer failed to load at all
     // -- reads as single-player rather than as a lobby stuck connecting.
     this.storage = storage === undefined ? defaultStorage() : storage;
-    this.lan = { status: 'offline', peerId: null, hostId: null, peers: [], url: '', error: '' };
+    this.lan = {
+      status: 'offline', peerId: null, hostId: null, peers: [], url: '', error: '',
+      // Relay mode. `roomCode` is set once this client owns or has joined the
+      // room; `roomRequired` means the relay already has a game and wants the
+      // code. They are never both meaningful at once.
+      mode: 'lan', relayUrl: '', roomCode: null, roomRequired: false, joinError: '',
+    };
     this.lanName = sanitizeName(this.readStored(LAN_NAME_KEY));
+    this.lan.relayUrl = String(this.readStored(RELAY_URL_KEY) ?? '');
+    if (this.lan.relayUrl) this.lan.mode = 'relay';
     this.lanElements = null;
     this.lanRosterKey = null;
     this.lanEditing = false;
@@ -436,9 +480,16 @@ export class Frontend {
    * their current value, so a status change does not have to re-send the
    * roster and a dropped connection does not blank the names mid-frame.
    */
-  setLanState({ status, peerId, hostId, peers, url, error } = {}) {
+  setLanState({
+    status, peerId, hostId, peers, url, error,
+    mode, roomCode, roomRequired, joinError,
+  } = {}) {
     const lan = this.lan;
     if (status !== undefined) lan.status = LAN_STATUSES.includes(status) ? status : 'offline';
+    if (mode !== undefined) lan.mode = NET_MODES.includes(mode) ? mode : 'lan';
+    if (roomCode !== undefined) lan.roomCode = roomCode == null ? null : String(roomCode);
+    if (roomRequired !== undefined) lan.roomRequired = Boolean(roomRequired);
+    if (joinError !== undefined) lan.joinError = joinError == null ? '' : String(joinError);
     if (peerId !== undefined) lan.peerId = peerId == null ? null : String(peerId);
     if (hostId !== undefined) lan.hostId = hostId == null ? null : String(hostId);
     if (peers !== undefined) lan.peers = lanPeers(peers);
@@ -470,9 +521,35 @@ export class Frontend {
 
   /** The line the host reads out to the room. */
   get lanNoteText() {
+    if (this.lan.mode === 'relay') {
+      if (this.lan.roomCode) return 'Give the code above to your friends.';
+      if (this.lan.roomRequired) return 'A game is already running here. Enter its code to join.';
+      if (this.lan.status === 'connecting') return 'Reaching the relay…';
+      return 'Paste the address of a relay to play with people anywhere.';
+    }
     if (this.lan.url) return `Others on this WiFi join at ${this.lan.url}`;
     if (this.lan.status === 'offline') return 'No LAN server found. Playing solo.';
     return '';
+  }
+
+  /** The code as displayed: spaced, because it gets read out loud. */
+  get roomCodeText() {
+    return this.lan.roomCode ? this.lan.roomCode.split('').join(' ') : '';
+  }
+
+  getRelayUrl() {
+    return this.lan.relayUrl;
+  }
+
+  /** Persist a pasted relay address. Returns the stored value. */
+  setRelayUrl(url) {
+    const next = String(url ?? '').trim();
+    if (next !== this.lan.relayUrl) {
+      this.lan.relayUrl = next;
+      this.writeStored(RELAY_URL_KEY, next);
+    }
+    this.render();
+    return this.lan.relayUrl;
   }
 
   /** Compact, serializable lobby view for the debug API. */
@@ -485,6 +562,11 @@ export class Frontend {
       error: this.lan.error,
       name: this.lanName,
       peers: this.lanRoster,
+      mode: this.lan.mode,
+      relayUrl: this.lan.relayUrl,
+      roomCode: this.lan.roomCode,
+      roomRequired: this.lan.roomRequired,
+      joinError: this.lan.joinError,
     };
   }
 
@@ -595,8 +677,9 @@ export class Frontend {
     panel.addEventListener('click', (event) => event.stopPropagation());
 
     const head = make('div', 'fe-lan-head', panel);
-    make('h2', 'fe-lan-title', head, 'LAN game');
+    make('h2', 'fe-lan-title', head, 'Multiplayer');
     const status = make('span', 'fe-lan-status', head, '');
+
 
     const field = make('div', 'fe-lan-field', panel);
     const label = make('label', null, field, 'Name');
@@ -612,6 +695,65 @@ export class Frontend {
     name.addEventListener('change', () => this.action('lan-name', name.value));
     name.addEventListener('blur', () => this.action('lan-name', name.value));
 
+    // Two deliberate modes rather than one guessing. LAN needs nothing typed;
+    // relay is a choice you make, so it is a choice you click.
+    const modes = make('div', 'fe-lan-modes', panel);
+    const modeButtons = NET_MODES.map((mode) => {
+      const button = make('button', 'fe-lan-mode', modes,
+        mode === 'lan' ? 'This WiFi' : 'Relay');
+      button.type = 'button';
+      button.dataset.mode = mode;
+      button.addEventListener('click', () => this.action('net-mode', mode));
+      return button;
+    });
+
+    const relay = make('div', 'fe-lan-relay', panel);
+    const relayField = make('div', 'fe-lan-field', relay);
+    const relayLabel = make('label', null, relayField, 'Relay');
+    const relayInput = make('input', 'fe-lan-input', relayField);
+    relayInput.type = 'text';
+    relayInput.id = 'fe-relay-url';
+    relayInput.placeholder = 'https://your-relay.example.com';
+    relayInput.spellcheck = false;
+    relayInput.value = this.lan.relayUrl;
+    relayLabel.setAttribute?.('for', relayInput.id);
+    relayInput.addEventListener('input', () => { this.relayEditing = true; });
+    relayInput.addEventListener('change', () => this.action('relay-url', relayInput.value));
+    relayInput.addEventListener('blur', () => this.action('relay-url', relayInput.value));
+
+    // Shown to whoever opened the room: the thing they read out.
+    const codeBox = make('div', 'fe-lan-code', relay);
+    make('span', 'fe-lan-code-label', codeBox, 'Your room code');
+    const codeValue = make('strong', 'fe-lan-code-value', codeBox, '');
+
+    // Shown to everyone else: a game is already running, so type the code.
+    const joinBox = make('div', 'fe-lan-join', relay);
+    const joinLabel = make('label', null, joinBox, 'Room code');
+    const joinInput = make('input', 'fe-lan-input fe-lan-code-input', joinBox);
+    joinInput.type = 'text';
+    joinInput.id = 'fe-relay-code';
+    joinInput.maxLength = ROOM_CODE_LENGTH;
+    joinInput.placeholder = 'ABCD';
+    joinInput.spellcheck = false;
+    joinLabel.setAttribute?.('for', joinInput.id);
+    const submitCode = () => {
+      const code = normalizeRoomCode(joinInput.value);
+      joinInput.value = code;
+      if (code.length === ROOM_CODE_LENGTH) this.action('relay-code', code);
+    };
+    joinInput.addEventListener('input', () => {
+      joinInput.value = normalizeRoomCode(joinInput.value);
+      // Four characters is the whole code, so there is nothing to confirm.
+      if (joinInput.value.length === ROOM_CODE_LENGTH) submitCode();
+    });
+    joinInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') submitCode();
+    });
+    const joinButton = make('button', 'fe-lan-join-button', joinBox, 'Join');
+    joinButton.type = 'button';
+    joinButton.addEventListener('click', submitCode);
+    const joinError = make('p', 'fe-lan-error', relay, '');
+
     const roster = make('ul', 'fe-lan-roster', panel);
     const note = make('p', 'fe-lan-note', panel, '');
 
@@ -620,7 +762,10 @@ export class Frontend {
     if (anchor && content.insertBefore) content.insertBefore(panel, anchor);
     else content.appendChild?.(panel);
 
-    this.lanElements = { panel, status, name, roster, note, make };
+    this.lanElements = {
+      panel, status, name, roster, note, make,
+      modeButtons, relay, relayInput, codeBox, codeValue, joinBox, joinInput, joinError,
+    };
     return panel;
   }
 
@@ -629,8 +774,27 @@ export class Frontend {
     if (!lan) return;
     lan.panel.dataset.visible = String(this.screen === 'title' || this.screen === 'pause');
     lan.panel.dataset.status = this.lan.status;
+    lan.panel.dataset.mode = this.lan.mode;
     lan.status.textContent = this.lanStatusText;
     lan.note.textContent = this.lanNoteText;
+
+    for (const button of lan.modeButtons ?? []) {
+      button.dataset.on = String(button.dataset.mode === this.lan.mode);
+    }
+    if (lan.relay) {
+      const relayMode = this.lan.mode === 'relay';
+      lan.relay.dataset.visible = String(relayMode);
+      // The code box and the code prompt are mutually exclusive: you either
+      // opened this room or you are trying to get into it.
+      lan.codeBox.dataset.visible = String(relayMode && Boolean(this.lan.roomCode));
+      lan.codeValue.textContent = this.roomCodeText;
+      lan.joinBox.dataset.visible = String(relayMode && this.lan.roomRequired);
+      lan.joinError.textContent = this.lan.joinError;
+      lan.joinError.dataset.visible = String(Boolean(this.lan.joinError));
+      if (!this.relayEditing && lan.relayInput.value !== this.lan.relayUrl) {
+        lan.relayInput.value = this.lan.relayUrl;
+      }
+    }
     // Never overwrite a field the player is mid-edit in; the sanitized value
     // lands on blur instead, where it cannot move the caret under them.
     if (!this.lanEditing && lan.name.value !== this.lanName) lan.name.value = this.lanName;

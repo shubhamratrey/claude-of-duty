@@ -12,7 +12,9 @@
 // unit. `hostTimeSeconds()` converts once, at the edge, because
 // SnapshotBuffer works in seconds.
 
-import { MSG, decode, encode, sanitizeName } from './protocol.js';
+import {
+  MSG, decode, encode, sanitizeName, normalizeRoomCode, isRoomCode,
+} from './protocol.js';
 
 const SOCKET_OPEN = 1;
 const PING_INTERVAL_MS = 2000;
@@ -65,6 +67,8 @@ export class NetClient {
     this.socket = null;
     this.handlers = new Map();
     this.peerId = null;
+    this.roomCode = null;
+    this.roomRequired = false;
     this.hostId = null;
     this.roster = new Map();
     this.droppedFrames = 0;
@@ -151,6 +155,19 @@ export class NetClient {
   }
 
   /**
+   * Offer a room code to a relay that asked for one.
+   *
+   * Only meaningful after `roomRequired`. A wrong code comes back as
+   * `serverError` with reason 'bad-code' and leaves the socket open, so the
+   * player can retype it without reconnecting.
+   */
+  joinRoom(code) {
+    const clean = normalizeRoomCode(code);
+    if (!isRoomCode(clean)) return false;
+    return this.send(MSG.JOIN_ROOM, { code: clean, name: this.name });
+  }
+
+  /**
    * Encode and send. A dropped frame is a normal outcome — at 20 Hz the next
    * snapshot is 50 ms away — so a closed socket is a silent no-op rather than
    * an exception every tick.
@@ -207,7 +224,10 @@ export class NetClient {
     }
     const { type, data, from } = message;
     const identityChanged = this.applyIdentity(type, data);
-    this.emit(type, data, from);
+    // MSG.ERROR is the string 'error', which is also the lifecycle event for a
+    // socket failure. Emitting a relay's refusal under that name would fire
+    // every socket-error handler in the app, so it gets its own name.
+    this.emit(type === MSG.ERROR ? 'serverError' : type, data, from);
     if (identityChanged) this.emit('statechange', this.getState());
   }
 
@@ -217,6 +237,9 @@ export class NetClient {
       case MSG.WELCOME:
         this.peerId = data.peerId;
         this.hostId = data.hostId;
+        // Present only from a relay; the LAN server omits it entirely.
+        this.roomCode = data.roomCode ?? null;
+        this.roomRequired = false;
         this.roster = new Map(data.roster
           .filter((peer) => peer && typeof peer.id === 'string')
           .map((peer) => [peer.id, { id: peer.id, name: sanitizeName(peer.name) }]));
@@ -237,6 +260,10 @@ export class NetClient {
       case MSG.HOST_CHANGED:
         this.hostId = data.hostId;
         break;
+      case MSG.ROOM_REQUIRED:
+        // A relay saying a game is already running here, so the code is needed.
+        this.roomRequired = true;
+        break;
       case MSG.PONG:
         this.applyPong(data);
         return false;
@@ -250,6 +277,8 @@ export class NetClient {
     // A reconnect is a new peer with a new id, so nothing here survives a
     // close — in particular a disconnected guest must never still read as host.
     this.peerId = null;
+    this.roomCode = null;
+    this.roomRequired = false;
     this.hostId = null;
     this.roster.clear();
     this.clockSamples.length = 0;
@@ -323,6 +352,8 @@ export class NetClient {
       rttMs: this.bestRttMs === null ? null : Math.round(this.bestRttMs),
       peers: [...this.roster.values()].map(({ id, name }) => ({ id, name })),
       droppedFrames: this.droppedFrames,
+      roomCode: this.roomCode,
+      roomRequired: this.roomRequired,
       droppedOutbound: this.droppedOutbound,
     };
   }
