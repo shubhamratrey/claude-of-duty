@@ -71,6 +71,37 @@ may point at either.
 The relay serves no game assets. Players get the page from the public site, from
 their own static host, or from a local `npm run lan`.
 
+### The pasted URL accepts any of four schemes
+
+Tunnels print `https://odd-brook-1234.trycloudflare.com`. Requiring the player
+to rewrite that as `wss://` is friction that buys nothing and invites a silent
+failure, so the field accepts `https`, `http`, `wss` and `ws` and normalises:
+
+```
+https://relay.example.com    ->  wss://relay.example.com/net
+http://192.168.1.50:8787     ->  ws://192.168.1.50:8787/net
+wss:// or ws://              ->  taken as given
+```
+
+Whitespace is trimmed, a trailing slash is tolerated, and a URL that already
+ends in `/net` is not given a second one. A URL that does not parse is reported
+in the panel before anything is opened.
+
+### The relay is probed over HTTP first
+
+`GET /relay/health` returns `{ relay: true, room: <boolean>, peers: <number> }`.
+The client fetches this before opening the socket, exactly as the LAN path
+already probes its own origin.
+
+Two reasons, both about diagnosis rather than function. Pasting something that
+is not a relay -- the game's own URL, a typo, a dead tunnel -- then reports
+"that is not a relay" rather than sitting on "connecting". And a blocked
+mixed-content `fetch` **throws and is catchable**, whereas a blocked
+mixed-content WebSocket simply never opens and raises nothing to script; the
+probe therefore converts the worst diagnostic in this design into a plain
+message. The `ws://`-on-HTTPS check still runs first, since it needs no network
+round trip to be certain.
+
 ## Protocol
 
 Three additions. Everything after `welcome` — `playerState`, `botState`, hits,
@@ -124,7 +155,7 @@ New:
 | File | Purpose | Pure logic |
 | --- | --- | --- |
 | `server/relay-room.mjs` | code generation, one room's membership and lifecycle | yes |
-| `server/relay-server.mjs` | sockets, admission, relaying | no |
+| `server/relay-server.mjs` | sockets, admission, relaying, `/relay/health` | no |
 
 Modified:
 
@@ -181,6 +212,8 @@ unchanged.
 | `joinRoom` arrives after the room was destroyed | `error { reason: 'no-room' }`; the client reconnects, which makes it the new creator |
 | Room full | `error { reason: 'room-full' }`, socket closed |
 | `ws://` URL entered on an HTTPS page | rejected in the client before opening the socket, with an explanation; the browser would otherwise block it with no observable error at all |
+| URL that does not parse | reported in the panel; nothing is opened |
+| URL that parses but is not a relay | the health probe answers wrong or 404s; the panel says so instead of hanging on "connecting" |
 | Frame before admission that is not `joinRoom` or `hello` | dropped, counted |
 | No join within 30 s | socket closed |
 | Relay unreachable or URL malformed | the panel shows the error; the game still starts and plays single-player |
@@ -210,6 +243,21 @@ be silently placed into that room without the code, and that is asserted.
 browsers. The first is given a code; the second joins with it; they see each
 other's bodies and agree on the scoreboard. A third browser attempting a wrong
 code must be refused and must see no remote bodies.
+
+## Why WebSocket rather than HTTP
+
+Considered and rejected as the transport. Server-sent events are one-directional,
+so client messages would each need a POST; every POST carries full headers,
+roughly 500 bytes against WebSocket's ~6 bytes of framing, twenty times a second
+per player. That is about a fiftyfold overhead increase on the chattiest path,
+plus connection churn and added latency in a game where latency is the thing
+that matters. Long-polling is worse again.
+
+It remains a legitimate fallback for a network that blocks WebSocket outright,
+which is rare and which tunnels handle. Not built speculatively.
+
+HTTP is still used for the health probe described above, where a single
+request's overhead is irrelevant and its error reporting is better.
 
 ## Risks
 
