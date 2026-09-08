@@ -15,6 +15,15 @@ const _friendCenter = new THREE.Vector3();
 const _friendClosest = new THREE.Vector3();
 const _sphere = new THREE.Sphere();
 
+// The wire rounds positions to a hundredth and angles to four decimals.
+// Repeating those two lines here keeps the renderer free of a net-layer
+// import, which would otherwise be a dependency in the wrong direction.
+const roundCoordinate = (value) => Math.round(value * 100) / 100;
+const roundAngle = (value) => Math.round(value * 10000) / 10000;
+// dampAngle accumulates yaw across wraps, so a bot that keeps turning one
+// way drifts past the protocol's angle bound. Fold it back before it ships.
+const wrapAngle = (value) => Math.atan2(Math.sin(value), Math.cos(value));
+
 function findNode(root, name) {
   return root.getObjectByName(name) ?? null;
 }
@@ -347,13 +356,188 @@ function makeHitbox(geometry, position, enemy, multiplier, region) {
   return mesh;
 }
 
-class Enemy {
-  constructor(manager, spawn, index) {
+// The external-actor contract, satisfied by EnemyManager.createNetworkActor()
+// and by anything the net layer chooses to register itself:
+//
+//   { id: string, root: THREE.Object3D, hitboxes: Mesh[], dead: boolean,
+//     takeDamage(amount, hit, source): number }
+//
+// Deliberately the shape of an Enemy, because a remote player is this bot rig
+// with a socket for a brain. Its hitboxes must carry the usual
+// userData.enemyHit = { enemy, multiplier, region } so a local ray resolves
+// one through the same handlePlayerHit() path a bot travels.
+
+// A baked-pose avatar with no opinion about what drives it: the body rig, its
+// three hitboxes and the pose state machine. Enemy adds the brain, the crowd
+// agent and the weapon timers; NetworkActor adds only an id, because the wire
+// has already decided everything else about it.
+class PoseBody {
+  constructor(manager, name) {
     this.manager = manager;
-    this.index = index;
     this.maxHealth = manager.enemyHealth;
     this.health = this.maxHealth;
     this.dead = false;
+    this.movementSpeed = 0;
+    this.walkTime = 0;
+    this.deathBlend = 0;
+    this.networkTime = 0;
+
+    this.root = new THREE.Group();
+    this.root.name = name;
+    this.modelRoot = new THREE.Group();
+    this.modelRoot.rotation.y = MODEL_FORWARD_OFFSET;
+    this.root.add(this.modelRoot);
+
+    // Every body reuses the same baked geometry buffers. Only one pose root
+    // is visible at a time, so walking costs ordinary static-mesh rendering
+    // instead of six independently skinned characters on every frame.
+    this.visualFrames = Object.fromEntries(Object.entries(manager.poseTemplates).map(([state, templates]) => [
+      state,
+      templates.map((template) => {
+        const body = template.clone(true);
+        const weapon = manager.weaponTemplate.clone(true);
+        this.modelRoot.add(body);
+        const mounts = attachWeapon(body, weapon, manager.weaponMounts[state]);
+        this.modelRoot.remove(body);
+        return { body, weapon, ...mounts };
+      }),
+    ]));
+    this.visualState = null;
+    this.visualFrameIndex = -1;
+    this.visualTime = 0;
+    this.visualTimeScale = 1;
+    this.body = null;
+    this.weapon = null;
+    this.handMount = null;
+    this.weaponMount = null;
+    this.muzzle = null;
+    this.currentAction = null;
+    this.staticVisual = true;
+    this.bakedMeshCount = manager.bakedWeaponMeshCount;
+    this.showVisualFrame('idle', 0);
+
+    this.hitboxes = [
+      makeHitbox(new THREE.BoxGeometry(18, 34, 15), new THREE.Vector3(0, 43, 0), this, 1, 'torso'),
+      makeHitbox(new THREE.SphereGeometry(7, 8, 6), new THREE.Vector3(0, 65, 0), this, 2, 'head'),
+      makeHitbox(new THREE.BoxGeometry(17, 29, 13), new THREE.Vector3(0, 16, 0), this, 0.75, 'legs'),
+    ];
+    this.root.add(...this.hitboxes);
+    manager.scene.add(this.root);
+  }
+
+  showVisualFrame(state, index) {
+    const frames = this.visualFrames[state] ?? this.visualFrames.idle;
+    const nextIndex = THREE.MathUtils.clamp(index, 0, frames.length - 1);
+    if (this.visualState === state && this.visualFrameIndex === nextIndex) return;
+    if (this.visualState) {
+      this.modelRoot.remove(this.visualFrames[this.visualState][this.visualFrameIndex].body);
+    }
+    const frame = frames[nextIndex];
+    this.modelRoot.add(frame.body);
+    this.visualState = state;
+    this.visualFrameIndex = nextIndex;
+    this.body = frame.body;
+    this.weapon = frame.weapon;
+    this.handMount = frame.hand ?? null;
+    this.weaponMount = frame.mount ?? null;
+    this.muzzle = frame.muzzle ?? null;
+  }
+
+  advanceVisual(deltaSeconds) {
+    const frames = this.visualFrames[this.visualState] ?? this.visualFrames.idle;
+    if (frames.length <= 1) return;
+    this.visualTime += deltaSeconds * this.visualTimeScale;
+    const frameRate = this.manager.poseFrameRates[this.visualState] ?? 1;
+    const rawIndex = Math.floor(this.visualTime * frameRate);
+    const index = this.visualState === 'death'
+      ? Math.min(frames.length - 1, rawIndex)
+      : rawIndex % frames.length;
+    this.showVisualFrame(this.visualState, index);
+  }
+
+  playAction(name) {
+    const state = this.visualFrames[name] ? name : 'idle';
+    if (state === this.visualState) return;
+    this.visualTime = state === 'run'
+      ? this.walkTime % this.manager.clips.run.duration
+      : 0;
+    this.visualTimeScale = 1;
+    this.showVisualFrame(state, 0);
+    this.currentAction = { _clip: { name: state } };
+  }
+
+  // Drives a replicated body from the wire rather than from a brain: the
+  // machine that owns this body has already resolved its movement, pose and
+  // death, so there is nothing here but reconciliation. Safe to call before
+  // load() has baked the pose templates, where it drops the snapshot instead
+  // of throwing inside somebody's frame.
+  applyNetworkState({ pos, yaw, state, frame, dead, t } = {}) {
+    if (!this.visualFrames) return false;
+
+    if (Array.isArray(pos) &&
+        Number.isFinite(pos[0]) && Number.isFinite(pos[1]) && Number.isFinite(pos[2])) {
+      // botState stamps one host time per snapshot. When the caller passes it
+      // through, the planar step between snapshots is the only speed estimate
+      // a replica has, and enemyFire() reads it to widen a bot's spread
+      // against a moving human.
+      const elapsed = Number.isFinite(t) ? t - this.networkTime : 0;
+      if (elapsed > 0 && this.networkTime > 0) {
+        this.movementSpeed =
+          Math.hypot(pos[0] - this.root.position.x, pos[2] - this.root.position.z) / elapsed;
+      }
+      if (Number.isFinite(t)) this.networkTime = t;
+      this.root.position.set(pos[0], pos[1], pos[2]);
+    }
+    if (Number.isFinite(yaw)) this.root.rotation.y = yaw;
+
+    const wantsDead = Boolean(dead);
+    if (wantsDead !== this.dead) {
+      this.dead = wantsDead;
+      if (wantsDead) {
+        // The visual half of die(). Scoring stays with the host, so no
+        // onDeath fires here and no crowd agent is touched.
+        this.deathBlend = 0;
+        this.playAction('death');
+      } else {
+        // Every part of the death blend has to be undone, or the respawned
+        // body stands upright at its new spawn while still lying face-down
+        // ten units into the deck. spawnAt() does the same for a local bot.
+        this.deathBlend = 0;
+        this.modelRoot.rotation.z = 0;
+        this.modelRoot.position.y = 0;
+        this.health = this.maxHealth;
+        this.playAction('idle');
+      }
+    }
+
+    if (typeof state === 'string' && this.visualFrames[state]) {
+      const frames = this.visualFrames[state];
+      const index = THREE.MathUtils.clamp(Math.trunc(Number(frame) || 0), 0, frames.length - 1);
+      this.showVisualFrame(state, index);
+      // Resume the local animation from the frame the wire named so the pose
+      // keeps advancing until the next snapshot instead of stuttering on it.
+      const frameRate = this.manager.poseFrameRates?.[state] ?? 1;
+      this.visualTime = frameRate > 0 ? index / frameRate : 0;
+      this.visualTimeScale = 1;
+    }
+
+    this.root.updateMatrixWorld(true);
+    return true;
+  }
+
+  // Pose bodies are clone(true) of the manager's templates, so their geometry
+  // and materials are shared with every other body and must outlive this one.
+  // Detaching is therefore the whole of disposal, exactly as it is for the
+  // bots in EnemyManager.dispose().
+  dispose() {
+    this.root.removeFromParent();
+  }
+}
+
+class Enemy extends PoseBody {
+  constructor(manager, spawn, index) {
+    super(manager, `enemy_${index}`);
+    this.index = index;
     this.state = 'patrol';
     this.lastSeen = new THREE.Vector3();
     this.lastSeenTimer = 0;
@@ -389,79 +573,8 @@ class Enemy {
       markerIndex: spawn.markerIndex ?? index,
     };
 
-    this.root = new THREE.Group();
-    this.root.name = `enemy_${index}`;
     this.root.rotation.y = Number(spawn.yaw) || 0;
-    this.modelRoot = new THREE.Group();
-    this.modelRoot.rotation.y = MODEL_FORWARD_OFFSET;
-    this.root.add(this.modelRoot);
-
-    // Every enemy reuses the same baked geometry buffers. Only one pose root
-    // is visible at a time, so walking costs ordinary static-mesh rendering
-    // instead of six independently skinned characters on every frame.
-    this.visualFrames = Object.fromEntries(Object.entries(manager.poseTemplates).map(([state, templates]) => [
-      state,
-      templates.map((template) => {
-        const body = template.clone(true);
-        const weapon = manager.weaponTemplate.clone(true);
-        this.modelRoot.add(body);
-        const mounts = attachWeapon(body, weapon, manager.weaponMounts[state]);
-        this.modelRoot.remove(body);
-        return { body, weapon, ...mounts };
-      }),
-    ]));
-    this.visualState = null;
-    this.visualFrameIndex = -1;
-    this.visualTime = 0;
-    this.visualTimeScale = 1;
-    this.body = null;
-    this.weapon = null;
-    this.handMount = null;
-    this.weaponMount = null;
-    this.muzzle = null;
-    this.currentAction = null;
-    this.staticVisual = true;
-    this.bakedMeshCount = manager.bakedWeaponMeshCount;
-    this.showVisualFrame('idle', 0);
-
-    this.hitboxes = [
-      makeHitbox(new THREE.BoxGeometry(18, 34, 15), new THREE.Vector3(0, 43, 0), this, 1, 'torso'),
-      makeHitbox(new THREE.SphereGeometry(7, 8, 6), new THREE.Vector3(0, 65, 0), this, 2, 'head'),
-      makeHitbox(new THREE.BoxGeometry(17, 29, 13), new THREE.Vector3(0, 16, 0), this, 0.75, 'legs'),
-    ];
-    this.root.add(...this.hitboxes);
-    manager.scene.add(this.root);
     this.spawnAt(spawn);
-  }
-
-  showVisualFrame(state, index) {
-    const frames = this.visualFrames[state] ?? this.visualFrames.idle;
-    const nextIndex = THREE.MathUtils.clamp(index, 0, frames.length - 1);
-    if (this.visualState === state && this.visualFrameIndex === nextIndex) return;
-    if (this.visualState) {
-      this.modelRoot.remove(this.visualFrames[this.visualState][this.visualFrameIndex].body);
-    }
-    const frame = frames[nextIndex];
-    this.modelRoot.add(frame.body);
-    this.visualState = state;
-    this.visualFrameIndex = nextIndex;
-    this.body = frame.body;
-    this.weapon = frame.weapon;
-    this.handMount = frame.hand ?? null;
-    this.weaponMount = frame.mount ?? null;
-    this.muzzle = frame.muzzle ?? null;
-  }
-
-  advanceVisual(deltaSeconds) {
-    const frames = this.visualFrames[this.visualState] ?? this.visualFrames.idle;
-    if (frames.length <= 1) return;
-    this.visualTime += deltaSeconds * this.visualTimeScale;
-    const frameRate = this.manager.poseFrameRates[this.visualState] ?? 1;
-    const rawIndex = Math.floor(this.visualTime * frameRate);
-    const index = this.visualState === 'death'
-      ? Math.min(frames.length - 1, rawIndex)
-      : rawIndex % frames.length;
-    this.showVisualFrame(this.visualState, index);
   }
 
   spawnAt(spawn) {
@@ -521,17 +634,6 @@ class Enemy {
     this.root.position.copy(projected.point);
     this.root.updateMatrixWorld(true);
     return true;
-  }
-
-  playAction(name) {
-    const state = this.visualFrames[name] ? name : 'idle';
-    if (state === this.visualState) return;
-    this.visualTime = state === 'run'
-      ? this.walkTime % this.manager.clips.run.duration
-      : 0;
-    this.visualTimeScale = 1;
-    this.showVisualFrame(state, 0);
-    this.currentAction = { _clip: { name: state } };
   }
 
   takeDamage(amount, hit = null, source = null) {
@@ -734,7 +836,7 @@ class Enemy {
     }
   }
 
-  update(deltaSeconds, active) {
+  update(deltaSeconds, active, simulate = true) {
     const dt = Math.max(0, Math.min(Number(deltaSeconds) || 0, 0.1));
 
     if (this.dead) {
@@ -743,8 +845,20 @@ class Enemy {
       this.deathBlend = Math.min(1, this.deathBlend + dt * 2.8);
       this.modelRoot.rotation.z = -this.deathBlend * 1.35;
       this.modelRoot.position.y = -this.deathBlend * 10;
+      // A replica's respawn is the host's call and arrives as network state.
+      if (!simulate) return;
       this.respawnTimer -= dt;
       if (this.respawnTimer <= 0) this.spawnAt(this.manager.respawnFor(this));
+      return;
+    }
+
+    // A replica is told where it is by applyNetworkState, so neither the crowd
+    // agent nor the AI runs for it. Only the pose keeps moving, which is what
+    // carries the body smoothly across the gap between snapshots.
+    if (!simulate) {
+      if (!active) return;
+      this.advanceVisual(dt);
+      this.root.updateMatrixWorld(true);
       return;
     }
 
@@ -807,6 +921,46 @@ class Enemy {
   }
 }
 
+// A remote human player. Structurally it is an Enemy without the brain: no
+// crowd agent, no decision timers, and decide() is never reachable from here.
+// Everything visible about it is the bot rig, which is what makes a headshot
+// on a person cost exactly what a headshot on a bot costs.
+class NetworkActor extends PoseBody {
+  constructor(manager, id) {
+    super(manager, `actor_${id}`);
+    this.id = id;
+    this.lastDamageSource = null;
+  }
+
+  // Damage is shooter-reported, death is victim-confirmed. This machine only
+  // predicts the health behind a hitmarker it has already drawn; the client
+  // that owns this body decides when it dies and says so through
+  // applyNetworkState. Do not "fix" this to kill locally: that produces a body
+  // which drops on one screen and keeps shooting on every other.
+  takeDamage(amount, hit = null, source = null) {
+    if (this.dead) return 0;
+    const damage = Math.max(0, Number(amount) || 0);
+    const applied = Math.min(this.health, damage);
+    this.health -= applied;
+    this.lastDamageSource = source ?? null;
+    return applied;
+  }
+
+  // Replicated bodies still need their pose and their death blend advanced
+  // between snapshots. There is nothing else here to tick.
+  update(deltaSeconds, active = true) {
+    if (!active) return;
+    const dt = Math.max(0, Math.min(Number(deltaSeconds) || 0, 0.1));
+    this.advanceVisual(dt);
+    if (this.dead) {
+      this.deathBlend = Math.min(1, this.deathBlend + dt * 2.8);
+      this.modelRoot.rotation.z = -this.deathBlend * 1.35;
+      this.modelRoot.position.y = -this.deathBlend * 10;
+    }
+    this.root.updateMatrixWorld(true);
+  }
+}
+
 export class EnemyManager {
   constructor({
     scene,
@@ -859,6 +1013,9 @@ export class EnemyManager {
     this.aimConvergeTime = Math.max(0.1, this.aimConvergeTime);
     this.visionCosine = Math.cos(THREE.MathUtils.degToRad(fieldOfView / 2));
     this.enemies = [];
+    // Remote humans, registered by the net layer. Empty in single-player,
+    // where every path below therefore behaves exactly as it did before.
+    this.externalActors = new Set();
     this.clips = Object.create(null);
     this.raycaster = new THREE.Raycaster();
     this.spawnCursor = 0;
@@ -992,22 +1149,38 @@ export class EnemyManager {
   }
 
   get hitTargets() {
-    return this.enemies.flatMap((enemy) => enemy.dead ? [] : enemy.hitboxes);
+    const targets = this.enemies.flatMap((enemy) => enemy.dead ? [] : enemy.hitboxes);
+    // Remote players are shot with the same ray the bots are.
+    for (const actor of this.externalActors) {
+      if (!actor.dead) targets.push(...actor.hitboxes);
+    }
+    return targets;
   }
 
   // Returns what the shot actually did so the HUD can confirm it. A miss and a
   // hit on an already-dead body both report null.
-  handlePlayerHit(hit, baseDamage = 34) {
+  //
+  // `apply: false` resolves the hit without touching the victim, which is what
+  // a networked shooter wants: it draws its own hitmarker from this descriptor
+  // and sends the damage to the machine that owns the body, because that
+  // machine is the one allowed to decide the body died.
+  handlePlayerHit(hit, baseDamage = 34, { apply = true } = {}) {
     const data = hit?.object?.userData?.enemyHit;
-    if (!data?.enemy || data.enemy.dead) return null;
+    const victim = data?.enemy;
+    if (!victim || victim.dead) return null;
     const multiplier = data.multiplier ?? 1;
-    const damage = data.enemy.takeDamage(baseDamage * multiplier, hit, this.player);
+    const damage = apply
+      ? victim.takeDamage(baseDamage * multiplier, hit, this.player)
+      : Math.max(0, Number(baseDamage) || 0) * multiplier;
     return {
-      enemy: data.enemy,
+      enemy: victim,
       region: data.region ?? 'torso',
       multiplier,
       damage,
-      killed: data.enemy.dead,
+      // Never true when nothing was applied: the victim confirms its own death.
+      killed: victim.dead,
+      id: this.targetId(victim),
+      kind: this.externalActors.has(victim) ? 'actor' : 'bot',
     };
   }
 
@@ -1043,7 +1216,10 @@ export class EnemyManager {
 
   targetId(target) {
     if (!target) return null;
-    return target === this.player ? 'player' : `bot-${target.index}`;
+    if (target === this.player) return 'player';
+    // External actors carry their own peer id ('peer-3'); bots have none and
+    // stay addressed by index, which is what the scoreboard already keys on.
+    return typeof target.id === 'string' ? target.id : `bot-${target.index}`;
   }
 
   targetPosition(target, result = new THREE.Vector3()) {
@@ -1059,7 +1235,7 @@ export class EnemyManager {
   selectTarget(enemy, minimumDot = this.visionCosine) {
     let best = null;
     let bestDistance = Infinity;
-    const candidates = [this.player, ...this.enemies];
+    const candidates = [this.player, ...this.enemies, ...this.externalActors];
     for (const candidate of candidates) {
       if (candidate === enemy || this.targetDead(candidate)) continue;
       const distance = enemy.root.position.distanceTo(this.targetPosition(candidate, _target));
@@ -1112,7 +1288,7 @@ export class EnemyManager {
     let hitActor = null;
     let actorHit = null;
     let actorDistance = Infinity;
-    for (const candidate of [this.player, ...this.enemies]) {
+    for (const candidate of [this.player, ...this.enemies, ...this.externalActors]) {
       if (candidate === enemy || this.targetDead(candidate)) continue;
       this.targetFeet(candidate, _friendCenter);
       _sphere.center.set(_friendCenter.x, _friendCenter.y + 39, _friendCenter.z);
@@ -1156,7 +1332,7 @@ export class EnemyManager {
     _direction.multiplyScalar(1 / distance);
     this.raycaster.ray.set(_origin, _direction);
     const radiusSquared = this.friendlyFireRadius * this.friendlyFireRadius;
-    for (const teammate of [this.player, ...this.enemies]) {
+    for (const teammate of [this.player, ...this.enemies, ...this.externalActors]) {
       if (teammate === candidate || teammate === intended || this.targetDead(teammate)) continue;
       this.targetPosition(teammate, _friendCenter);
       this.raycaster.ray.closestPointToPoint(_friendCenter, _friendClosest);
@@ -1169,8 +1345,14 @@ export class EnemyManager {
 
   isCombatCrowded(candidate) {
     const spacingSquared = this.combatSpacing * this.combatSpacing;
-    return this.enemies.some((teammate) => teammate !== candidate && !teammate.dead &&
-      planarDistance(teammate.root.position, candidate.root.position) ** 2 < spacingSquared);
+    const crowds = (other) => other !== candidate && !other.dead &&
+      planarDistance(other.root.position, candidate.root.position) ** 2 < spacingSquared;
+    if (this.enemies.some(crowds)) return true;
+    // A remote player standing on a bot crowds it the same way a bot does.
+    for (const actor of this.externalActors) {
+      if (crowds(actor)) return true;
+    }
+    return false;
   }
 
   findEngagementPoint(enemy) {
@@ -1240,7 +1422,7 @@ export class EnemyManager {
     for (const candidate of this.spawnCandidates) {
       let nearest = Infinity;
       let visibleThreats = 0;
-      for (const other of [this.player, ...this.enemies]) {
+      for (const other of [this.player, ...this.enemies, ...this.externalActors]) {
         if (other === actor || this.targetDead(other)) continue;
         const otherPosition = this.targetPosition(other, _target);
         const distance = candidate.position.distanceTo(otherPosition);
@@ -1273,8 +1455,75 @@ export class EnemyManager {
     };
   }
 
-  update(deltaSeconds, { active = true } = {}) {
-    for (const enemy of this.enemies) enemy.update(deltaSeconds, Boolean(active));
+  registerExternalActor(actor) {
+    if (!actor?.root) return null;
+    this.externalActors.add(actor);
+    return actor;
+  }
+
+  unregisterExternalActor(actor) {
+    const removed = this.externalActors.delete(actor);
+    // A departed peer is not dead, only gone, so targetDead() would keep every
+    // bot that was hunting it aimed at a body nobody owns any more.
+    if (removed) {
+      for (const enemy of this.enemies) {
+        if (enemy.currentTarget !== actor) continue;
+        enemy.currentTarget = null;
+        enemy.playerVisible = false;
+        enemy.decisionTimer = 0;
+      }
+    }
+    return removed;
+  }
+
+  findNetworkActor(id) {
+    for (const actor of this.externalActors) {
+      if (actor.id === id) return actor;
+    }
+    return null;
+  }
+
+  // Builds a body for a remote player and registers it. Returns null before
+  // load() has baked the pose templates, so a peer that joins during loading
+  // is retried rather than crashing the session; the caller decides when.
+  createNetworkActor(id) {
+    if (!this.poseTemplates || !this.weaponTemplate) return null;
+    const key = String(id);
+    return this.findNetworkActor(key) ?? this.registerExternalActor(new NetworkActor(this, key));
+  }
+
+  destroyNetworkActor(idOrActor) {
+    const actor = typeof idOrActor === 'string' ? this.findNetworkActor(idOrActor) : idOrActor;
+    if (!actor) return false;
+    this.unregisterExternalActor(actor);
+    actor.dispose?.();
+    return true;
+  }
+
+  // The host's per-tick bot broadcast, shaped as the protocol's botState.bots
+  // entries. Rounding happens here because the transform is already in hand.
+  networkSnapshot() {
+    const bots = [];
+    for (const enemy of this.enemies) {
+      const position = enemy.root.position;
+      bots.push({
+        i: enemy.index,
+        pos: [roundCoordinate(position.x), roundCoordinate(position.y), roundCoordinate(position.z)],
+        yaw: roundAngle(wrapAngle(enemy.root.rotation.y)),
+        state: enemy.visualState ?? 'idle',
+        frame: Math.max(0, enemy.visualFrameIndex),
+        dead: enemy.dead,
+      });
+    }
+    return bots;
+  }
+
+  // `simulate: false` is a guest: the host owns the bots, so this machine only
+  // replays what applyNetworkState puts on them.
+  update(deltaSeconds, { active = true, simulate = true } = {}) {
+    for (const enemy of this.enemies) enemy.update(deltaSeconds, Boolean(active), Boolean(simulate));
+    // Registered actors are replicas by definition, whoever simulates the bots.
+    for (const actor of this.externalActors) actor.update?.(deltaSeconds, Boolean(active));
   }
 
   dispose() {
@@ -1283,6 +1532,8 @@ export class EnemyManager {
       enemy.root.removeFromParent();
     }
     this.enemies.length = 0;
+    for (const actor of this.externalActors) actor.dispose?.();
+    this.externalActors.clear();
   }
 }
 

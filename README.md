@@ -39,11 +39,19 @@ repository root:
 
 ```powershell
 npm install
-python -m http.server 8000 --directory export/web
+npm run lan
 ```
 
 Open <http://localhost:8000>. The viewer must be served over HTTP; opening
 `index.html` directly will not load its modules and binary assets.
+
+`npm run lan` also prints a LAN address, and anyone on the same WiFi who opens
+it joins the match. See [LAN multiplayer](#lan-multiplayer). A plain static
+server still works if you only want single player:
+
+```powershell
+python -m http.server 8000 --directory export/web
+```
 
 Controls:
 
@@ -73,6 +81,68 @@ stronger texture filtering. Both Auto and Quality smooth the scene and weapon
 edges using supported HDR multisampling, with FXAA as the fallback. Resolution
 stays within pixel and GPU size limits. Choose a preset from the title or pause
 menu; the selection is saved on the device.
+
+## LAN multiplayer
+
+`npm run lan` serves the game and runs a small relay beside it:
+
+```
+Claude of Duty — LAN server
+  Local    http://localhost:8000
+  LAN      http://192.168.1.42:8000   <- share this on the WiFi
+```
+
+Anyone on the same network who opens that address joins the same free-for-all.
+Up to eight people; the six bots stay in the match as extra combatants, so a
+two-player game still feels populated. Enter a name on the title screen and the
+lobby shows who else is in.
+
+No internet is needed. Three.js and Recast are served from `export/web/vendor`
+rather than a CDN, so the WiFi does not need an uplink. Run `npm run vendor`
+after changing those dependencies.
+
+### How it works
+
+One browser is elected **host** — the oldest connection — and it owns the bots
+and the scoreboard. Everyone else replicates them. Every client owns its own
+player. The server itself has no game rules; it assigns peer ids, keeps the
+join order, and forwards messages.
+
+Damage follows one rule:
+
+> Damage is shooter-reported. Death is victim-confirmed. Scoring is
+> host-recorded.
+
+You raycast locally and announce the hit; the machine that owns the body
+decides whether it died; the host is the only machine that writes the
+scoreboard. This keeps your own spawn protection, regeneration and death timing
+on your own machine, so a death never feels stolen. It also means the shooter
+is trusted about whether a shot connected, which is the right trade among
+people in one room and the wrong one on the open internet. Sanity checks
+(per-weapon damage ceiling, rate, range) catch bugs, not adversaries.
+
+Remote players are drawn with the bot rig — the same baked poses and the same
+torso/head/legs hitboxes — so headshots on your friends work through the code
+that already shipped. Bodies render 100 ms in the past, interpolated between
+real snapshots, which at LAN latency looks exact.
+
+If the host closes their tab, the next-oldest player is promoted and the match
+continues; expect a brief hitch while the navmesh crowd re-initialises.
+
+### One slow machine cannot slow the room
+
+A stalled laptop stops draining its socket, and a relay that queued for it
+would spend everyone's time on one client's backlog. Instead, state snapshots
+are dropped to a congested peer — the next snapshot supersedes them anyway —
+while events like hits and deaths are always delivered. A peer that falls
+hopelessly behind is disconnected and left to reconnect cleanly.
+
+### Testing it
+
+`npm run ai:lan` boots the real server, opens two independent browsers, joins
+both, stands them face to face, and asserts that each sees the other, that
+damage crosses the wire, that the kill is scored, and that both scoreboards
+agree. Artifacts land in `artifacts/ai-lan`.
 
 ## Frontend
 

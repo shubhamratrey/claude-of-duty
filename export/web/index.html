@@ -459,13 +459,13 @@
 </style>
 <script type="importmap">
 { "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/",
-  "three-mesh-bvh": "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.9.14/src/index.js",
-  "@recast-navigation/core": "https://cdn.jsdelivr.net/npm/@recast-navigation/core@0.43.1/dist/index.mjs",
-  "@recast-navigation/generators": "https://cdn.jsdelivr.net/npm/@recast-navigation/generators@0.43.1/dist/index.mjs",
-  "@recast-navigation/wasm": "https://cdn.jsdelivr.net/npm/@recast-navigation/wasm@0.43.1/dist/recast-navigation.wasm-compat.js",
-  "@recast-navigation/three": "https://cdn.jsdelivr.net/npm/@recast-navigation/three@0.43.1/dist/index.mjs"
+  "three": "./vendor/three/build/three.module.js",
+  "three/addons/": "./vendor/three/examples/jsm/",
+  "three-mesh-bvh": "./vendor/three-mesh-bvh/src/index.js",
+  "@recast-navigation/core": "./vendor/@recast-navigation/core/dist/index.mjs",
+  "@recast-navigation/generators": "./vendor/@recast-navigation/generators/dist/index.mjs",
+  "@recast-navigation/wasm": "./vendor/@recast-navigation/wasm/dist/recast-navigation.wasm-compat.js",
+  "@recast-navigation/three": "./vendor/@recast-navigation/three/dist/index.mjs"
 } }
 </script>
 </head>
@@ -652,6 +652,9 @@ import { TouchControls } from './touch-controls.js';
 import { GraphicsSettings, filterTextures } from './graphics-settings.js';
 import { GraphicsRenderer } from './graphics-renderer.js';
 import { PlayCounter } from './play-counter.js';
+import { NetSession } from './net/net-session.js';
+import { packFlags, packVec3 } from './net/protocol.js';
+import { RemoteBots } from './net/remote-players.js';
 import { loadCollisionWorld } from './collision-world.js';
 import { optimizeStaticScene } from './scene-optimizer.js';
 import { applyEnvironmentLighting, loadGradeLut, POST_SHADER, HAZE, applyMaterialClasses } from './lighting.js';
@@ -696,7 +699,8 @@ const WEAPON_DEFINITIONS = Object.freeze({
     viewmodelUrl: 'viewmodel/t6_wpn_ar_hk416_view_lod0.glb',
     magazineUrl: 'viewmodel/t6_attach_mag_hk416_view_lod0.glb',
     // Authored attachment offset from the shipped hk416_mp weapon file.
-    magazineOffset: Object.freeze([3.389, 0, -0.383]),    clips: Object.freeze({
+    magazineOffset: Object.freeze([3.389, 0, -0.383]),
+    clips: Object.freeze({
       idle: 'viewmodel/anims/viewmodel_hk416_idle.json',
       fire: 'viewmodel/anims/viewmodel_hk416_fire.json',
       adsFire: 'viewmodel/anims/viewmodel_hk416_ads_fire.json',
@@ -722,7 +726,8 @@ const WEAPON_DEFINITIONS = Object.freeze({
     magazineOffset: Object.freeze([4.473, -1.085, -1.5]),
     // T6's roll is around the weapon's forward X axis. The GLB weld applies
     // the engine-to-view transform after this attachment transform.
-    magazineRotation: Object.freeze([THREE.MathUtils.degToRad(-15), 0, 0]),    clips: Object.freeze({
+    magazineRotation: Object.freeze([THREE.MathUtils.degToRad(-15), 0, 0]),
+    clips: Object.freeze({
       idle: 'viewmodel/anims/viewmodel_an94_idle.json',
       introFire: 'viewmodel/anims/viewmodel_an94_intro_fire.json',
       fire: 'viewmodel/anims/viewmodel_an94_fire.json',
@@ -745,7 +750,8 @@ const WEAPON_DEFINITIONS = Object.freeze({
     magazineUrl: 'viewmodel/t6_attach_mag_sa58_view_lod0.glb',
     // Authored attachment offset from the shipped sa58_mp weapon file.
     magazineOffset: Object.freeze([4.006, 0.015, 1.821]),
-    magazineRotation: Object.freeze([THREE.MathUtils.degToRad(0), 0, 0]),    clips: Object.freeze({
+    magazineRotation: Object.freeze([THREE.MathUtils.degToRad(0), 0, 0]),
+    clips: Object.freeze({
       idle: 'viewmodel/anims/viewmodel_sa58_idle.json',
       fire: 'viewmodel/anims/viewmodel_sa58_fire.json',
       adsFire: 'viewmodel/anims/viewmodel_sa58_ads_fire.json',
@@ -860,7 +866,8 @@ const WEAPON_DEFINITIONS = Object.freeze({
     magazineUrl: 'viewmodel/t6_attach_mag_x95l_view_lod0.glb',
     // Authored attachment offset from the shipped tar21_mp weapon file.
     magazineOffset: Object.freeze([-9.754, 0, -0.04]),
-    magazineRotation: Object.freeze([THREE.MathUtils.degToRad(0), 0, 0]),    clips: Object.freeze({
+    magazineRotation: Object.freeze([THREE.MathUtils.degToRad(0), 0, 0]),
+    clips: Object.freeze({
       idle: 'viewmodel/anims/viewmodel_tavor_idle.json',
       fire: 'viewmodel/anims/viewmodel_tavor_fire.json',
       adsFire: 'viewmodel/anims/viewmodel_tavor_ads_fire.json',
@@ -881,7 +888,8 @@ const WEAPON_DEFINITIONS = Object.freeze({
     magazineUrl: 'viewmodel/t6_attach_mag_type95_view_lod0.glb',
     // Authored attachment offset from the shipped type95_mp weapon file.
     magazineOffset: Object.freeze([-8.38, 0, -0.678]),
-    magazineRotation: Object.freeze([THREE.MathUtils.degToRad(0), 0, 0]),    clips: Object.freeze({
+    magazineRotation: Object.freeze([THREE.MathUtils.degToRad(0), 0, 0]),
+    clips: Object.freeze({
       idle: 'viewmodel/anims/viewmodel_type95_ar_idle.json',
       fire: 'viewmodel/anims/viewmodel_type95_ar_fire.json',
       adsFire: 'viewmodel/anims/viewmodel_type95_ar_ads_fire.json',
@@ -903,7 +911,8 @@ const WEAPON_DEFINITIONS = Object.freeze({
     magazineUrl: 'viewmodel/t6_attach_mag_xm8_view_lod0.glb',
     // Authored attachment offset from the shipped xm8_mp weapon file.
     magazineOffset: Object.freeze([4.212, 0, 0.279]),
-    magazineRotation: Object.freeze([THREE.MathUtils.degToRad(0), 0, 0]),    clips: Object.freeze({
+    magazineRotation: Object.freeze([THREE.MathUtils.degToRad(0), 0, 0]),
+    clips: Object.freeze({
       idle: 'viewmodel/anims/viewmodel_xm8_idle.json',
       fire: 'viewmodel/anims/viewmodel_xm8_fire.json',
       adsFire: 'viewmodel/anims/viewmodel_xm8_ads_fire.json',
@@ -1157,7 +1166,7 @@ const frontend = new Frontend({
     classCards,
     classSelection: document.getElementById('fe-class-selection'),
     classConfirm: blocker.querySelector('[data-action="class-confirm"]'),
-    onAction: (name) => menuAction(name),
+    onAction: (name, value) => menuAction(name, value),
   },
   onPlay: () => requestPlay(),
   onResume: () => requestPlay(),
@@ -1281,7 +1290,45 @@ const MEDAL_HOLD_SECONDS = 2.1;
 const MEDAL_FADE_SECONDS = 0.45;
 
 const match = new FreeForAllMatch({ scoreLimit: 30, timeLimitSeconds: 300 });
-match.register('player', 'YOU', { human: true });
+
+// LAN multiplayer is attempted only when this page is served from a private
+// address. The public deployment has no relay behind it, and a client retrying
+// a socket against the CDN every few seconds forever would be pure noise.
+const LAN_HOST_PATTERN =
+  /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$)/;
+const lanEligible = LAN_HOST_PATTERN.test(location.hostname);
+let netSession = null;
+let remoteBots = null;
+let pendingNetworkSpawn = null;
+
+// The local player's key in the scoreboard. Offline it stays 'player'. On a
+// LAN the host writes one scoreboard for the whole room, so every combatant
+// needs a key that is unique across machines and this becomes the peer id.
+let localCombatantId = 'player';
+let localPlayerName = 'YOU';
+match.register(localCombatantId, localPlayerName, { human: true });
+
+// Re-key the local combatant once the server hands out an identity, carrying
+// the existing score across so a mid-match join does not reset to zero.
+function adoptCombatantId(nextId, nextName = localPlayerName) {
+  const id = String(nextId ?? 'player');
+  localPlayerName = nextName || localPlayerName;
+  if (id === localCombatantId) {
+    match.register(localCombatantId, localPlayerName, { human: true });
+    renderMatchUi();
+    return;
+  }
+  const previous = match.combatants.get(localCombatantId);
+  match.unregister?.(localCombatantId);
+  localCombatantId = id;
+  const entry = match.register(localCombatantId, localPlayerName, { human: true });
+  if (previous) {
+    entry.kills = previous.kills;
+    entry.deaths = previous.deaths;
+    entry.streak = previous.streak;
+  }
+  renderMatchUi();
+}
 
 const touchControls = new TouchControls({
   root: document.getElementById('touch-controls'),
@@ -1527,12 +1574,15 @@ function progress(name, event) {
 
 function combatantId(actor) {
   if (!actor) return null;
-  return actor === player ? 'player' : Number.isInteger(actor.index) ? `bot-${actor.index}` : null;
+  if (actor === player) return localCombatantId;
+  if (typeof actor.id === 'string') return actor.id;
+  return Number.isInteger(actor.index) ? `bot-${actor.index}` : null;
 }
 
 function resetPlayerLife() {
   clearKeys();
-  const spawn = enemies?.safeSpawnFor(player);
+  const spawn = pendingNetworkSpawn ?? enemies?.safeSpawnFor(player);
+  pendingNetworkSpawn = null;
   if (spawn) {
     player.setSpawn(spawn.position, { eye: false });
     camera.quaternion.setFromEuler(new THREE.Euler(0, spawn.yaw, 0, 'YXZ'));
@@ -1566,7 +1616,7 @@ function restartMatch() {
 
 function renderMatchUi() {
   const state = match.getState();
-  const playerEntry = state.standings.find((entry) => entry.id === 'player');
+  const playerEntry = state.standings.find((entry) => entry.id === localCombatantId);
   const minutes = Math.floor(state.remainingSeconds / 60);
   const seconds = String(state.remainingSeconds % 60).padStart(2, '0');
   matchStatus.innerHTML = `${playerEntry?.kills ?? 0} / ${state.scoreLimit} &nbsp; <small>${minutes}:${seconds} · #${playerEntry?.place ?? 1}</small>`;
@@ -1593,7 +1643,7 @@ function renderMatchUi() {
   }));
   const winner = state.standings.find((entry) => entry.id === state.winnerId);
   matchResult.textContent = state.phase === 'ended'
-    ? `${winner?.id === 'player' ? 'VICTORY' : `${winner?.name ?? 'Unknown'} wins`}${touchControls.mode ? '' : ' · press Enter to play again'}`
+    ? `${winner?.id === localCombatantId ? 'VICTORY' : `${winner?.name ?? 'Unknown'} wins`}${touchControls.mode ? '' : ' · press Enter to play again'}`
     : `First to ${state.scoreLimit} kills${touchControls.mode ? '' : ' · hold Tab for scores'}`;
   document.getElementById('touch-restart').hidden = state.phase !== 'ended';
   document.getElementById('touch-score-close').hidden = state.phase === 'ended';
@@ -1643,7 +1693,11 @@ function updateMedalPopups() {
 
 // Pause-menu buttons drive the same state the keyboard shortcuts do, so the
 // overlays stay in sync however they were toggled.
-function menuAction(name) {
+function menuAction(name, value) {
+  if (name === 'lan-name') {
+    netSession?.setName?.(value);
+    return;
+  }
   if (name === 'respawn') {
     if (playerHealth) playerHealth.respawn();
     else player?.respawn();
@@ -1664,7 +1718,7 @@ function syncMenuButtons() {
 const loadingManager = new THREE.LoadingManager();
 const loader = new GLTFLoader(loadingManager);
 const ktx2Loader = new KTX2Loader(loadingManager)
-  .setTranscoderPath('https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/libs/basis/')
+  .setTranscoderPath('./vendor/three/examples/jsm/libs/basis/')
   .detectSupport(renderer);
 loader.setKTX2Loader(ktx2Loader);
 loader.setMeshoptDecoder(MeshoptDecoder);
@@ -1723,6 +1777,8 @@ function clearKeys() {
 
 // A kill marker outlives a body marker so the confirmation still reads when
 // the killing round lands in the middle of a held burst.
+const _netForward = new THREE.Vector3();
+
 function showHitmarker(kind) {
   hitmarker.dataset.kind = kind;
   hitmarkerMaxLife = kind === 'kill' ? 0.34 : 0.18;
@@ -1737,8 +1793,23 @@ function fireShot({ triggerShotCount = 0 } = {}) {
     targets: enemies?.hitTargets ?? [],
     weapon: activeWeaponId,
   });
-  const damaged = enemies?.handlePlayerHit(hit, activeWeaponSlot.definition.damage);
-  if (damaged) {
+  const online = Boolean(netSession?.enabled);
+  if (online) {
+    const muzzle = viewmodel.muzzlePosition();
+    netSession.reportFire(muzzle, camera.getWorldDirection(_netForward));
+  }
+  // Resolve first without applying, because who owns the damage depends on what
+  // was hit and that is only known after the ray has been resolved.
+  const baseDamage = activeWeaponSlot.definition.damage;
+  const report = enemies?.handlePlayerHit(hit, baseDamage, { apply: !online });
+  if (report) {
+    const ownsTarget = !online || (netSession.isHost && report.kind === 'bot');
+    // A second call is the apply pass; resolution is a userData lookup, so the
+    // repeat costs nothing measurable.
+    const damaged = online && ownsTarget
+      ? enemies.handlePlayerHit(hit, baseDamage)
+      : report;
+    if (online) netSession.reportHit(report.id, report.damage, report.region);
     showHitmarker(damaged.killed ? 'kill' : damaged.region === 'head' ? 'head' : 'torso');
     weaponEffects.playHitmarker(damaged);
   }
@@ -1908,6 +1979,7 @@ function getDebugState() {
       scene: mapOptimization,
     },
     menu: frontend.getState(),
+    net: netSession?.getState?.() ?? null,
     match: match.getState(),
     medals: medals?.getState() ?? null,
     hud: hud.textContent,
@@ -1989,6 +2061,11 @@ function createDebugApi() {
     respawnPlayer() {
       playerHealth?.respawn();
       return getDebugState().player;
+    },
+    fireOnce() {
+      if (!ready || !viewmodel.ready) return false;
+      fireShot({ triggerShotCount: 1 });
+      return true;
     },
     respawnEnemies() {
       enemies?.enemies.forEach((enemy) => enemy.spawnAt(enemy.spawnPoint));
@@ -2196,7 +2273,8 @@ async function start() {
       onDeath: ({ source }) => {
         clearKeys();
         deathSource = source;
-        match.recordKill(combatantId(source), 'player');
+        if (netSession?.enabled) netSession.reportDeath(combatantId(source));
+        else match.recordKill(combatantId(source), localCombatantId);
         medals?.onDeath();
         player.setEnabled(false);
         weapon.setTrigger(false);
@@ -2226,8 +2304,9 @@ async function start() {
           count: 6,
           onDeath: (victim, source) => {
             match.recordKill(combatantId(source), `bot-${victim.index}`);
+            netSession?.broadcastMatch(true);
             // Bot-on-bot kills stay out of the human player's medal chain.
-            if (medals && combatantId(source) === 'player') {
+            if (medals && combatantId(source) === localCombatantId) {
               for (const def of medals.onKill()) showMedalPopup(def);
             }
           },
@@ -2241,6 +2320,18 @@ async function start() {
     const botNames = ['ADMIRAL', 'CORSAIR', 'DEADEYE', 'MARINER', 'ROGUE', 'VIPER'];
     for (const enemy of enemies?.enemies ?? []) {
       match.register(`bot-${enemy.index}`, botNames[enemy.index] ?? `BOT ${enemy.index + 1}`);
+    }
+    await lanSessionReady;
+    if (netSession) {
+      remoteBots = new RemoteBots({ enemies });
+      netSession.attach(enemies);
+      // Anyone already in the lobby needs a combatant row and a body.
+      for (const peer of netSession.getState().peers ?? []) {
+        if (peer.id === netSession.peerId) continue;
+        match.register(peer.id, peer.name, { human: true });
+        netSession.remotePlayers?.ensure(peer.id, peer.name);
+      }
+      refreshLanPanel();
     }
     renderMatchUi();
 
@@ -2303,6 +2394,7 @@ async function start() {
     globalThis.hijacked = {
       scene, camera, renderer, player, navigation, collisionRoot, collisionWorld, hints, viewmodel,
       weapon, weaponEffects, playerHealth, enemies, reloadWeapon, selectWeapon, frontend,
+      net: netSession,
       lighting: {
         lightProbe, viewmodelProbe, enemyProbes, sceneSH,
         get probeVolume() { return probeVolume; },
@@ -2330,6 +2422,171 @@ async function start() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// LAN session
+//
+// The session owns the wire; this adapter is the only place it touches the
+// game. Every method here is either something the session needs to read, or
+// something it needs the game to do when a message arrives.
+// ---------------------------------------------------------------------------
+
+const _netEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+const _netOrigin = new THREE.Vector3();
+const _netDirection = new THREE.Vector3();
+
+// Movement flags for the outbound snapshot, refreshed each frame by tick().
+const netInput = {
+  moving: false, sprinting: false, crouched: false,
+  firing: false, aiming: false, grounded: true,
+};
+
+function lanSocketUrl() {
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${scheme}://${location.host}/net`;
+}
+
+function refreshLanPanel(status) {
+  const net = netSession?.getState?.();
+  frontend.setLanState?.({
+    status: status ?? (net?.connected ? 'connected' : 'offline'),
+    peerId: net?.peerId ?? null,
+    hostId: net?.hostId ?? null,
+    peers: net?.peers ?? [],
+    url: location.origin,
+  });
+}
+
+/**
+ * Is a LAN relay actually behind this origin?
+ *
+ * Asked before opening a socket. A plain static server answers a WebSocket
+ * upgrade with a 404, and without this probe the client would log a console
+ * error on every retry for the whole session -- which is both noise and, by
+ * the project's own test rules, a failure.
+ */
+async function lanServerPresent() {
+  try {
+    const response = await fetch('net/health', { cache: 'no-store' });
+    if (!response.ok) return false;
+    const info = await response.json();
+    return info?.lan === true;
+  } catch {
+    return false;
+  }
+}
+
+async function startLanSession() {
+  if (!lanEligible || !(await lanServerPresent())) {
+    frontend.setLanState?.({ status: 'offline', url: location.origin });
+    return null;
+  }
+  const session = new NetSession({
+    url: lanSocketUrl(),
+    name: frontend.getLanName?.() || 'PLAYER',
+    game: {
+      getLocalPlayerState() {
+        if (!player) return null;
+        _netEuler.setFromQuaternion(camera.quaternion);
+        return {
+          pos: packVec3(player.feetPosition),
+          yaw: _netEuler.y,
+          pitch: _netEuler.x,
+          flags: packFlags(netInput),
+          weaponId: activeWeaponId,
+          health: playerHealth?.health ?? 100,
+          alive: !playerHealth?.dead,
+        };
+      },
+
+      getBotSnapshot: () => enemies?.networkSnapshot() ?? [],
+      getMatchState: () => match.getState(),
+
+      applyMatchState(state) {
+        match.applyState(state);
+        renderMatchUi();
+      },
+
+      applyBotState(data) {
+        remoteBots?.applyBotState(data);
+      },
+
+      // The victim's own machine decides what a hit does to it, which is what
+      // keeps spawn protection and regeneration honest.
+      applyLocalDamage(amount, fromId) {
+        playerHealth?.takeDamage(amount, { id: fromId });
+      },
+
+      applyBotDamage(targetId, amount, box, fromId) {
+        const index = Number.parseInt(String(targetId).slice(4), 10);
+        const enemy = enemies?.enemies?.[index];
+        if (!enemy || enemy.dead) return false;
+        enemy.takeDamage(amount, null, { id: fromId });
+        return true;
+      },
+
+      applyAssignedSpawn(pos, yaw) {
+        pendingNetworkSpawn = {
+          position: new THREE.Vector3(pos[0], pos[1], pos[2]),
+          yaw: Number(yaw) || 0,
+        };
+      },
+
+      chooseSpawnFor: () => enemies?.safeSpawnFor(null) ?? null,
+
+      recordKill(killerId, victimId) {
+        match.recordKill(killerId, victimId);
+        renderMatchUi();
+      },
+
+      // Remote gunfire gets a flash and a positional report so a firefight two
+      // decks away sounds like one.
+      onRemoteFire(peerId, origin, dir) {
+        _netOrigin.set(origin[0], origin[1], origin[2]);
+        _netDirection.set(dir[0], dir[1], dir[2]);
+        weaponEffects.addMuzzleFlash(_netOrigin, _netDirection);
+        weaponEffects.playEnemyShot(_netOrigin, peerId.length);
+      },
+
+      onIdentity(peerId) {
+        adoptCombatantId(peerId, frontend.getLanName?.() || 'YOU');
+        refreshLanPanel('connected');
+      },
+
+      registerCombatant(id, name) {
+        match.register(id, name, { human: true });
+        renderMatchUi();
+      },
+
+      unregisterCombatant(id) {
+        match.unregister(id);
+        renderMatchUi();
+      },
+
+      onRoleChanged() {
+        refreshLanPanel();
+      },
+
+      onPeerBodyCreated: () => refreshLanPanel(),
+      onPeerBodyRemoved: () => refreshLanPanel(),
+    },
+  });
+
+  session.client.on('open', () => refreshLanPanel('connected'));
+  session.client.on('close', () => refreshLanPanel('connecting'));
+  session.client.on('error', () => refreshLanPanel('error'));
+  session.client.on('statechange', () => refreshLanPanel());
+  refreshLanPanel('connecting');
+  session.connect();
+  return session;
+}
+
+// Kicked off without awaiting: the lobby fills in when the probe answers, and
+// nothing about loading the map should wait on the network.
+const lanSessionReady = startLanSession().then((session) => {
+  netSession = session;
+  return session;
+});
+
 function tick() {
   requestAnimationFrame(tick);
   const frameWorkStartedAt = performance.now();
@@ -2352,8 +2609,21 @@ function tick() {
   if (player && simulationActive) {
     player.update(dt, controlsActive ? movement : {});
   }
-  if (simulationActive) navigation?.update(1 / 60, dt, 5);
-  enemies?.update(dt, { active: simulationActive });
+  const simulateBots = !netSession?.enabled || netSession.isHost;
+  if (simulationActive && simulateBots) navigation?.update(1 / 60, dt, 5);
+  enemies?.update(dt, { active: simulationActive, simulate: simulateBots });
+  if (netSession?.enabled) {
+    netInput.moving = controlsActive && Math.hypot(movement.forward, movement.strafe) > 0;
+    netInput.sprinting = Boolean(movement.sprint) && netInput.moving;
+    netInput.crouched = Boolean(player?.crouched);
+    netInput.firing = controlsActive && Boolean(mouseFire || touch.fire);
+    netInput.aiming = controlsActive && Boolean(mouseAim || touch.aim);
+    netInput.grounded = Boolean(player?.isGrounded);
+    // Runs regardless of simulationActive: a paused player still has a body
+    // everyone else can see, and still needs to receive them.
+    netSession.update(dt);
+    if (!netSession.isHost) remoteBots?.update(netSession.client.hostTimeSeconds());
+  }
   playerHealth?.update(simulationActive ? dt : 0);
   if (simulationActive) match.update(dt);
   weaponEffects.update(dt);

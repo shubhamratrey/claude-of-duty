@@ -41,6 +41,7 @@
 !/.tools/bake_probes.mjs
 !/.tools/prune-deploy.sh
 !/.tools/stage_cloudflare.mjs
+!/.tools/vendor_deps.mjs
 !/.tools/perf_probe.mjs
 !/.tools/xanim_to_json.mjs
 !/.tools/extract_t6_sab_audio.mjs
@@ -53,6 +54,7 @@
 !/.tools/ai-game.mjs
 !/.tools/mobile-game.mjs
 !/.tools/graphics-game.mjs
+!/.tools/lan-game.mjs
 !/export/
 !/export/web/
 !/export/web/**
