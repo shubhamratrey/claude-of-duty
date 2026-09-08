@@ -164,6 +164,8 @@ export async function createLanServer({
   root = DEFAULT_ROOT,
   host = '0.0.0.0',
   log = (line) => process.stdout.write(`${line}\n`),
+  hostSilenceMs = 6000,
+  hostWatchIntervalMs = 1000,
 } = {}) {
   const startedAt = performance.now();
   // Clients derive their clock offset from this, so it must be monotonic and
@@ -176,6 +178,36 @@ export async function createLanServer({
     backpressureDropped: 0, slowPeersDropped: 0,
   };
   const sockets = new Map(); // peerId -> WebSocket
+
+  // Host liveness.
+  //
+  // The host owns the bots and the match clock, so a host that stops
+  // simulating freezes the world for everyone while still holding the role --
+  // and nothing else notices, because its socket is fine and the snapshots the
+  // relay drops for it are the only pressure it was under. Silence on the
+  // host-only channel is the one signal that distinguishes "hosting" from
+  // "holding the title". Watching for it is what lets the match survive a
+  // laptop that went to sleep with the tab open.
+  let lastHostFrameAt = null;
+  let watchdog = null;
+
+  const noteHostActivity = () => { lastHostFrameAt = serverTime(); };
+
+  // Only ever measured against a host that has already broadcast at least once.
+  // A freshly joined host spends a long time loading 40 MB of map before its
+  // first botState, and demoting it mid-load would replace it with someone who
+  // is equally not ready.
+  const checkHostLiveness = () => {
+    if (lastHostFrameAt === null || roster.size < 2) return;
+    if (serverTime() - lastHostFrameAt <= hostSilenceMs) return;
+    const previous = roster.hostId;
+    const promoted = roster.promoteNext();
+    if (!promoted || promoted === previous) return;
+    const quiet = ((serverTime() - lastHostFrameAt) / 1000).toFixed(1);
+    lastHostFrameAt = null;
+    log(`[lan] * ${previous} went quiet for ${quiet}s - host is now ${promoted}`);
+    broadcast(protocol.MSG.HOST_CHANGED, { hostId: promoted });
+  };
 
   const server = http.createServer((request, response) => {
     try {
@@ -310,6 +342,7 @@ export async function createLanServer({
       stats.hostOnlyDropped += 1;
       return;
     }
+    if (protocol.HOST_ONLY.has(type)) noteHostActivity();
 
     stats.relayed += 1;
     broadcast(type, data, { exclude: peer.id, from: peer.id });
@@ -356,6 +389,8 @@ export async function createLanServer({
       log(`[lan] - ${peer.id} left (${roster.size} in match)`);
       const hostNow = roster.hostId;
       if (hostNow !== hostWas) {
+        // The incoming host must not inherit the outgoing one's silence.
+        lastHostFrameAt = null;
         log(`[lan] * host is now ${hostNow ?? 'nobody'}`);
         broadcast(protocol.MSG.HOST_CHANGED, { hostId: hostNow });
       }
@@ -370,6 +405,9 @@ export async function createLanServer({
       resolve();
     });
   });
+
+  watchdog = setInterval(checkHostLiveness, hostWatchIntervalMs);
+  watchdog.unref?.();
 
   const address = server.address();
   const boundPort = typeof address === 'object' && address ? address.port : port;
@@ -386,7 +424,9 @@ export async function createLanServer({
     url,
     wsUrl: `ws://${reachable}:${boundPort}/net`,
     serverTime,
+    checkHostLiveness,
     async close() {
+      clearInterval(watchdog);
       for (const socket of wss.clients) socket.terminate();
       await new Promise((resolve) => wss.close(resolve));
       server.closeAllConnections();

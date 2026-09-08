@@ -2644,8 +2644,20 @@ function tick() {
     player.update(dt, controlsActive ? movement : {});
   }
   const simulateBots = !netSession?.enabled || netSession.isHost;
-  if (simulationActive && simulateBots) navigation?.update(1 / 60, dt, 5);
-  enemies?.update(dt, { active: simulationActive, simulate: simulateBots });
+
+  // While hosting, the bots and the match clock belong to the room rather than
+  // to this player's pause menu. Bot simulation used to hang off the local
+  // player's own `simulationActive`, so the host pressing Escape -- or simply
+  // clicking away and losing pointer lock -- stopped the world for everyone
+  // else, measured at exactly zero bot movement on a guest. Offline, and on a
+  // guest, this stays `simulationActive`, so single-player pause is untouched.
+  const hosting = Boolean(netSession?.enabled) && netSession.isHost;
+  const worldActive = hosting
+    ? (!automationPaused && match.phase === 'playing')
+    : simulationActive;
+
+  if (worldActive && simulateBots) navigation?.update(1 / 60, dt, 5);
+  enemies?.update(dt, { active: worldActive, simulate: simulateBots });
   if (netSession?.enabled) {
     netInput.moving = controlsActive && Math.hypot(movement.forward, movement.strafe) > 0;
     netInput.sprinting = Boolean(movement.sprint) && netInput.moving;
@@ -2659,7 +2671,7 @@ function tick() {
     if (!netSession.isHost) remoteBots?.update(netSession.client.hostTimeSeconds());
   }
   playerHealth?.update(simulationActive ? dt : 0);
-  if (simulationActive) match.update(dt);
+  if (worldActive) match.update(dt);
   weaponEffects.update(dt);
   // Panned enemy fire is only meaningful while the listener tracks the camera.
   if (simulationActive) weaponEffects.updateListener(camera);

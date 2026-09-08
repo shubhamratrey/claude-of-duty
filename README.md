@@ -126,6 +126,11 @@ torso/head/legs hitboxes — so headshots on your friends work through the code
 that already shipped. Bodies render 100 ms in the past, interpolated between
 real snapshots, which at LAN latency looks exact.
 
+The host keeps the bots and the match clock running even while sitting in its
+own pause menu. Only that player is paused; the room is not. (Bot simulation
+originally hung off the local player's own pause state, so the host pressing
+Escape stopped the world for everybody else.)
+
 If the host closes their tab, the next-oldest player is promoted and the match
 continues. Everyone else keeps playing: the departed player's body and
 scoreboard row are removed, scores are preserved, and the new host picks the
@@ -135,6 +140,32 @@ too, the next one is promoted, and so on.
 
 A player who leaves keeps their entries in the kill feed -- that is a record of
 what happened -- but drops off the standings, which list who is still playing.
+
+### A host that stops hosting
+
+A slow host does not slow anyone else's game: guests keep their own frame rate,
+and player-versus-player never touches the host — a hit goes shooter, server,
+victim. Bot simulation is delta-time based, so a struggling host makes bot
+motion coarser rather than slower.
+
+A host that stops entirely is the real risk, because its socket stays perfectly
+healthy and nothing else notices. The server therefore watches the host-only
+channel: if the host has broadcast before and then goes quiet for six seconds
+while somebody else is present, the role moves to the next-oldest player. A
+host that has never broadcast is left alone, since a freshly joined one spends
+a long time loading the map before its first `botState`.
+
+A demotion sticks. When the old host recovers it comes back as a guest: it
+stops simulating, starts replicating, and its bots snap to the new host's
+truth. It cannot take the role back by simply resuming — the relay gates
+host-only messages on its own record of who is host, so a recovered host's
+`botState` is dropped rather than relayed, and there is never a window with two
+hosts. Any scores it recorded while the room had moved on are discarded in
+favour of the new host's scoreboard, which is what having a single authority
+means. It regains the role only if the current host later leaves.
+
+A player who actually disconnects and reconnects returns as a new peer with a
+new id and a fresh score; reconnects do not preserve identity.
 
 ### One slow machine cannot slow the room
 

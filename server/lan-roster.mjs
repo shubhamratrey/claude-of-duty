@@ -28,6 +28,8 @@ export class LanRoster {
     // replacement's avatar.
     this.nextOrder = 1;
     this.byId = new Map();
+    // Set only when a host is demoted for going silent; see hostId.
+    this.hostOverride = null;
   }
 
   /**
@@ -92,13 +94,35 @@ export class LanRoster {
     return [...this.byId.values()].sort((a, b) => a.order - b.order);
   }
 
-  /** The oldest surviving peer, or null when nobody is connected. */
+  /**
+   * Who is host: the oldest surviving peer, unless one has been demoted.
+   *
+   * A demotion sticks. A host that went silent long enough to be replaced does
+   * not get the role back when it recovers, because handing simulation back and
+   * forth between a struggling machine and a healthy one is worse for the room
+   * than leaving it where it works. The override lapses only when the peer
+   * holding it leaves, at which point election falls back to plain seniority.
+   */
   get hostId() {
+    if (this.hostOverride && this.byId.has(this.hostOverride)) return this.hostOverride;
     let host = null;
     for (const peer of this.byId.values()) {
       if (host === null || peer.order < host.order) host = peer;
     }
     return host ? host.id : null;
+  }
+
+  /**
+   * Move the role to the next-oldest peer. Returns the new host id, or null
+   * when there is nobody else to hand it to -- in which case the current host
+   * keeps it, since a match with no host is worse than one with a slow host.
+   */
+  promoteNext() {
+    const current = this.hostId;
+    const candidate = this.peers.find((peer) => peer.id !== current);
+    if (!candidate) return null;
+    this.hostOverride = candidate.id;
+    return candidate.id;
   }
 
   /** The `welcome` payload's roster: serialisable, ordered, host flagged. */
