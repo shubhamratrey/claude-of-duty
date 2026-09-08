@@ -23,6 +23,10 @@
 !/migrations/**
 !/test/
 !/test/**
+!/server/
+!/server/**
+!/docs/
+!/docs/**
 !/tests/
 !/tests/**
 !/.tools/
