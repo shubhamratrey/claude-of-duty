@@ -177,6 +177,19 @@ Expect internet latency to land on the victim rather than the shooter. You hit
 what you see; your friends occasionally die after they thought they had reached
 cover. That is the trade this netcode makes, not a bug.
 
+### Names over heads
+
+Every body you can actually see carries its name: people in the accent colour,
+bots muted, so you can tell a person from a bot at a glance. Plates fade with
+distance and vanish past about 3000 units.
+
+They respect line of sight. A name readable through a bulkhead is a wallhack,
+so each body is raycast against the collision mesh before its plate is drawn --
+staggered a couple per frame and cached, because `enemy-system.js` is right that
+full-map raycasts are too expensive to do thirteen of every frame. A plate can
+therefore linger about a tenth of a second after someone steps behind cover,
+which is imperceptible; doing it properly every frame would not be.
+
 ### A host that stops hosting
 
 A slow host does not slow anyone else's game: guests keep their own frame rate,
@@ -184,8 +197,14 @@ and player-versus-player never touches the host — a hit goes shooter, server,
 victim. Bot simulation is delta-time based, so a struggling host makes bot
 motion coarser rather than slower.
 
-A host that stops entirely is the real risk, because its socket stays perfectly
-healthy and nothing else notices. The server therefore watches the host-only
+A client that dies without closing -- a shut laptop, a phone that lost signal --
+leaves its socket ESTABLISHED, and through a tunnel the relay cannot tell the
+browser behind it has gone. Since a relay holds one room, that zombie does not
+just take a slot, it keeps the room alive so nobody else can open one. Every
+socket is therefore pinged every 30 seconds and dropped if it misses two.
+
+A host that stops entirely is a separate risk, because its socket stays
+perfectly healthy and nothing else notices. The server therefore watches the host-only
 channel: if the host has broadcast before and then goes quiet for six seconds
 while somebody else is present, the role moves to the next-oldest player. A
 host that has never broadcast is left alone, since a freshly joined one spends

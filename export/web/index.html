@@ -652,6 +652,7 @@ import { TouchControls } from './touch-controls.js';
 import { GraphicsSettings, filterTextures } from './graphics-settings.js';
 import { GraphicsRenderer } from './graphics-renderer.js';
 import { PlayCounter } from './play-counter.js';
+import { Nameplates } from './nameplates.js';
 import { NetSession } from './net/net-session.js';
 import { packFlags, packVec3, MSG } from './net/protocol.js';
 import { parseRelayUrl } from './net/relay-url.js';
@@ -1798,6 +1799,40 @@ function clearKeys() {
 // the killing round lands in the middle of a held burst.
 const _netForward = new THREE.Vector3();
 
+const nameplates = new Nameplates();
+const nameplateTargets = [];
+
+/**
+ * Everyone who could carry a name this frame: the bots, plus whichever people
+ * are connected. Names come from the match for bots and from the connection
+ * roster for people -- the roster is what `welcome` and `peerJoined` maintain,
+ * and it is the only copy guaranteed to be a real name rather than a peer id.
+ */
+function collectNameplateTargets() {
+  nameplateTargets.length = 0;
+  for (const enemy of enemies?.enemies ?? []) {
+    const id = `bot-${enemy.index}`;
+    nameplateTargets.push({
+      id,
+      name: match.combatants.get(id)?.name ?? `BOT ${enemy.index + 1}`,
+      position: enemy.root.position,
+      dead: enemy.dead,
+      kind: 'bot',
+    });
+  }
+  for (const peer of netSession?.remotePlayers?.players?.values?.() ?? []) {
+    if (!peer.actor?.root) continue;
+    nameplateTargets.push({
+      id: peer.id,
+      name: netSession.client?.roster?.get?.(peer.id)?.name ?? peer.name,
+      position: peer.actor.root.position,
+      dead: peer.alive === false,
+      kind: 'player',
+    });
+  }
+  return nameplateTargets;
+}
+
 function showHitmarker(kind) {
   hitmarker.dataset.kind = kind;
   hitmarkerMaxLife = kind === 'kill' ? 0.34 : 0.18;
@@ -1998,6 +2033,7 @@ function getDebugState() {
       scene: mapOptimization,
     },
     menu: frontend.getState(),
+    nameplates: nameplates.getState(),
     net: netSession?.getState?.() ?? null,
     match: match.getState(),
     medals: medals?.getState() ?? null,
@@ -2827,6 +2863,17 @@ function tick() {
       health: playerHealth?.health ?? 100,
       hitFlash: playerHealth?.hitFlash ?? 0,
       dead: Boolean(playerHealth?.dead),
+    });
+
+    // Plates hide with the rest of the HUD: they would otherwise float over
+    // the pause shell and the scoreboard.
+    nameplates.update({
+      camera,
+      collisionWorld,
+      targets: collectNameplateTargets(),
+      width: innerWidth,
+      height: innerHeight,
+      visible: ready && locked && !frontend.visible && !scoreboardHeld,
     });
 
     hudElapsed += dt;

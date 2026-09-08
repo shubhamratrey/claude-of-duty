@@ -67,10 +67,14 @@ export class RemotePlayers {
    * race on a fast join, not an error: the peer's next snapshot creates the
    * body a frame later.
    */
-  ensure(peerId, name = peerId) {
+  ensure(peerId, name = null) {
     const existing = this.players.get(peerId);
     if (existing) {
-      existing.name = name;
+      // Only a real name overwrites. This used to default to the peer id and
+      // assign unconditionally, so the twenty snapshots a second arriving
+      // through applyPlayerState stamped "peer-2" back over whatever
+      // `peerJoined` had announced, and nothing downstream ever saw a name.
+      if (name) existing.name = name;
       return existing;
     }
     const actor = this.enemies.createNetworkActor?.(peerId) ?? null;
@@ -78,7 +82,7 @@ export class RemotePlayers {
 
     const player = {
       id: peerId,
-      name,
+      name: name ?? peerId,
       actor,
       buffer: new SnapshotBuffer({ maxSamples: 32, maxAgeSeconds: 2 }),
       pose: null,
@@ -88,7 +92,7 @@ export class RemotePlayers {
       weaponId: null,
     };
     this.players.set(peerId, player);
-    this.onJoin?.(peerId, name);
+    this.onJoin?.(peerId, player.name);
     return player;
   }
 
