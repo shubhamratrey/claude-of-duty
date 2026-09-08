@@ -1299,6 +1299,7 @@ const LAN_HOST_PATTERN =
 const lanEligible = LAN_HOST_PATTERN.test(location.hostname);
 let netSession = null;
 let remoteBots = null;
+let lanJoinUrl = null;
 let pendingNetworkSpawn = null;
 
 // The local player's key in the scoreboard. Offline it stays 'player'. On a
@@ -2452,7 +2453,7 @@ function refreshLanPanel(status) {
     peerId: net?.peerId ?? null,
     hostId: net?.hostId ?? null,
     peers: net?.peers ?? [],
-    url: location.origin,
+    url: lanJoinUrl ?? location.origin,
   });
 }
 
@@ -2469,7 +2470,12 @@ async function lanServerPresent() {
     const response = await fetch('net/health', { cache: 'no-store' });
     if (!response.ok) return false;
     const info = await response.json();
-    return info?.lan === true;
+    if (info?.lan !== true) return false;
+    // The address to read out to the room comes from the server, because a
+    // player sitting at the host machine sees location.origin as localhost --
+    // the one address nobody else on the WiFi can reach.
+    lanJoinUrl = info.joinUrl ?? null;
+    return true;
   } catch {
     return false;
   }
@@ -2477,7 +2483,7 @@ async function lanServerPresent() {
 
 async function startLanSession() {
   if (!lanEligible || !(await lanServerPresent())) {
-    frontend.setLanState?.({ status: 'offline', url: location.origin });
+    frontend.setLanState?.({ status: 'offline', url: lanJoinUrl ?? location.origin });
     return null;
   }
   const session = new NetSession({

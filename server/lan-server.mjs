@@ -184,11 +184,19 @@ export async function createLanServer({
       // or the test harness) would answer a WebSocket upgrade with a 404 and
       // the client would log a console error every retry, forever.
       if (request.url === '/net/health') {
+        // The join URL has to come from the server. A player on the host
+        // machine sees location.origin as localhost, which is exactly the one
+        // address nobody else can use, so the panel would tell them to read
+        // out a link that does not work.
+        const addresses = lanAddresses();
+        const listenPort = server.address()?.port ?? port;
         const body = JSON.stringify({
           lan: true,
           peers: roster.peers.length,
           hostId: roster.hostId,
           serverTime: serverTime(),
+          joinUrl: addresses.length ? `http://${addresses[0]}:${listenPort}` : null,
+          joinUrls: addresses.map((address) => `http://${address}:${listenPort}`),
         });
         response.writeHead(200, {
           'Content-Type': 'application/json; charset=utf-8',
