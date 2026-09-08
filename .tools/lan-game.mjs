@@ -367,6 +367,36 @@ export async function runLanTest() {
     // enough to fail outright if replication is not happening at all.
     check('botsReplicateToTheGuest', worstDrift < 300, `worst drift ${worstDrift.toFixed(1)} units`);
 
+    // Host migration: the room must survive the host walking away.
+    //
+    // The guest has never ticked the navmesh crowd, so this also covers the
+    // handover -- if its agents were left stale the bots would snap somewhere
+    // else, and if it never took over they would simply stop.
+    const botsBefore = await guest.page.evaluate(
+      () => (globalThis.hijacked.debug.getState().enemies ?? []).map((b) => b.position));
+    await host.context.close();
+    host.closed = true;
+
+    await guest.page.waitForFunction(
+      () => globalThis.hijacked.debug.getState().net?.role === 'host',
+      undefined, { timeout: 30000 },
+    ).catch(() => {});
+    const promoted = (await state(guest.page)).net;
+    check('survivingPeerIsPromotedToHost', promoted.role === 'host',
+      `guest role is ${promoted.role}`);
+
+    // Give the new host a moment, then confirm its bots are actually being
+    // simulated rather than frozen at their last replicated transform.
+    await settle(guest.page, 90);
+    const botsAfter = await guest.page.evaluate(
+      () => (globalThis.hijacked.debug.getState().enemies ?? []).map((b) => b.position));
+    const moved = botsAfter.some((pos, index) => {
+      const was = botsBefore[index];
+      return was && Math.hypot(pos[0] - was[0], pos[2] - was[2]) > 1;
+    });
+    check('promotedHostSimulatesTheBots', moved,
+      'no bot moved after promotion, so nobody is running the AI');
+
     const failedRequests = consoleLog.filter((line) => line.includes('requestfailed'));
     check('noPageErrors', !consoleLog.some((line) => line.includes('pageerror')));
 
@@ -389,7 +419,7 @@ export async function runLanTest() {
       artifacts: artifactRoot,
     };
   } finally {
-    for (const { context } of pages) await context.close().catch(() => {});
+    for (const entry of pages) if (!entry.closed) await entry.context.close().catch(() => {});
     await browser.close().catch(() => {});
     await lan.close().catch(() => {});
   }

@@ -2562,7 +2562,21 @@ async function startLanSession() {
         renderMatchUi();
       },
 
-      onRoleChanged() {
+      onRoleChanged(role) {
+        // Taking over the bots.
+        //
+        // A guest holds the same bot bodies but has not ticked the navmesh
+        // crowd, so its agents are parked wherever they were when it joined
+        // while the bodies have been following the wire. Handing simulation
+        // straight back would snap all six to those stale agent positions.
+        // Teleporting each agent onto its replicated body first makes the
+        // handover continue from what everyone was actually looking at.
+        if (role === 'host' && enemies) {
+          for (const enemy of enemies.enemies ?? []) {
+            enemy.teleport(enemy.root.position);
+          }
+          netSession?.broadcastMatch(true);
+        }
         refreshLanPanel();
       },
 
