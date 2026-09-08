@@ -2,11 +2,13 @@
   "name": "claude-of-duty",
   "version": "1.0.0",
   "private": true,
-  "description": "Claude of Duty: Vibe Slops II — a browser-based Three.js shooter on the Hijacked map export.",
+  "description": "Claude of Duty: Vibe Slops II \u2014 a browser-based Three.js shooter on the Hijacked map export.",
   "scripts": {
     "cloudflare:stage": "node .tools/stage_cloudflare.mjs",
     "cloudflare:dev": "npm run cloudflare:stage && npx wrangler pages dev",
     "cloudflare:deploy": "npm run cloudflare:stage && npx wrangler pages deploy",
+    "lan": "node server/lan-server.mjs",
+    "vendor": "node .tools/vendor_deps.mjs",
     "ai:game": "node .tools/ai-game.mjs",
     "ai:state": "node .tools/ai-game.mjs state",
     "ai:screenshot": "node .tools/ai-game.mjs screenshot",
@@ -24,8 +26,10 @@
     "bake:probes": "node .tools/bake_probes.mjs",
     "perf:probe": "node .tools/perf_probe.mjs",
     "test": "node --test",
-    "test:unit": "node --test test/cloudflare-play-counter.test.mjs test/collision-world.test.mjs test/scene-optimizer.test.mjs test/player-controller.test.mjs test/touch-controls.test.mjs test/graphics-settings.test.mjs test/player-health.test.mjs test/weapon-controller.test.mjs test/viewmodel-ads.test.mjs test/viewmodel-camo.test.mjs test/view-bob.test.mjs test/hud.test.mjs test/free-for-all-match.test.mjs test/medals.test.mjs test/play-counter.test.mjs test/enemy-tactics.test.mjs test/frontend.test.mjs test/t6-sab-audio.test.mjs test/weapon-audio.test.mjs test/weapon-audio-manifest.test.mjs test/xanim-to-json.test.mjs test/notetracks.test.mjs test/web-textures.test.mjs test/lighting.test.mjs test/light-probes.test.mjs tests/navmesh-bake.test.mjs",
-    "test:browser": "node --test test/browser-smoke.mjs"
+    "test:unit": "node --test test/cloudflare-play-counter.test.mjs test/collision-world.test.mjs test/scene-optimizer.test.mjs test/player-controller.test.mjs test/touch-controls.test.mjs test/graphics-settings.test.mjs test/player-health.test.mjs test/weapon-controller.test.mjs test/viewmodel-ads.test.mjs test/viewmodel-camo.test.mjs test/view-bob.test.mjs test/hud.test.mjs test/free-for-all-match.test.mjs test/medals.test.mjs test/play-counter.test.mjs test/enemy-tactics.test.mjs test/frontend.test.mjs test/t6-sab-audio.test.mjs test/weapon-audio.test.mjs test/weapon-audio-manifest.test.mjs test/xanim-to-json.test.mjs test/notetracks.test.mjs test/web-textures.test.mjs test/lighting.test.mjs test/light-probes.test.mjs tests/navmesh-bake.test.mjs test/lan-roster.test.mjs test/lan-server.test.mjs test/protocol.test.mjs test/snapshot-buffer.test.mjs test/net-client.test.mjs test/net-session.test.mjs test/enemy-network.test.mjs test/lan-lobby.test.mjs test/vendor-deps.test.mjs test/lan-backpressure.test.mjs test/lan-host-liveness.test.mjs",
+    "test:browser": "node --test test/browser-smoke.mjs",
+    "ai:lan": "node .tools/lan-game.mjs",
+    "ai:lan3": "node .tools/lan-migration.mjs"
   },
   "repository": {
     "type": "git",
@@ -54,7 +58,8 @@
     "@recast-navigation/generators": "0.43.1",
     "@recast-navigation/three": "0.43.1",
     "three": "0.185.1",
-    "three-mesh-bvh": "^0.9.14"
+    "three-mesh-bvh": "^0.9.14",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "playwright-core": "^1.62.1"

@@ -1,0 +1,50 @@
+{
+  "generatedBy": ".tools/vendor_deps.mjs",
+  "versions": {
+    "three": {
+      "installed": "0.185.1",
+      "declared": "0.185.1"
+    },
+    "three-mesh-bvh": {
+      "installed": "0.9.14",
+      "declared": "^0.9.14"
+    },
+    "@recast-navigation/core": {
+      "installed": "0.43.1",
+      "declared": "0.43.1"
+    },
+    "@recast-navigation/generators": {
+      "installed": "0.43.1",
+      "declared": "0.43.1"
+    },
+    "@recast-navigation/three": {
+      "installed": "0.43.1",
+      "declared": "0.43.1"
+    },
+    "@recast-navigation/wasm": {
+      "installed": "0.43.1",
+      "declared": "(transitive)"
+    }
+  },
+  "threeAddons": {
+    "entryPoints": [
+      "libs/meshopt_decoder.module.js",
+      "lines/LineMaterial.js",
+      "lines/LineSegments2.js",
+      "lines/LineSegmentsGeometry.js",
+      "loaders/GLTFLoader.js",
+      "loaders/KTX2Loader.js",
+      "math/Capsule.js",
+      "math/Octree.js",
+      "shaders/FXAAShader.js",
+      "utils/SkeletonUtils.js"
+    ],
+    "closureFiles": 15,
+    "runtimeDirs": [
+      "libs/basis"
+    ]
+  },
+  "files": 129,
+  "bytes": 5721807,
+  "digest": "1a109ce083a30983"
+}

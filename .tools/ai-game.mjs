@@ -33,6 +33,11 @@ const mimeTypes = new Map([
   ['.html', 'text/html; charset=utf-8'],
   ['.css', 'text/css; charset=utf-8'],
   ['.js', 'text/javascript; charset=utf-8'],
+  // Vendored Recast ships .mjs entry points, and a module script served as
+  // octet-stream is rejected outright by strict MIME checking.
+  ['.mjs', 'text/javascript; charset=utf-8'],
+  ['.ktx2', 'image/ktx2'],
+  ['.webp', 'image/webp'],
   ['.json', 'application/json; charset=utf-8'],
   ['.png', 'image/png'],
   ['.wasm', 'application/wasm'],
@@ -81,6 +86,20 @@ async function staticServer() {
       // title-screen counter create a console 404 on every otherwise-clean run.
       if (requestUrl.pathname === '/api/plays') {
         const body = JSON.stringify({ players: 1, plays: 1 });
+        response.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Length': Buffer.byteLength(body),
+          'Cache-Control': 'no-store',
+        }).end(body);
+        return;
+      }
+      // This observer is a plain file server, not the LAN relay, so it answers
+      // the game's "is there multiplayer here?" probe honestly rather than with
+      // a 404. Same reasoning as /api/plays above: the single-player runs must
+      // stay console-clean. The LAN suite uses server/lan-server.mjs, which
+      // answers this with lan:true.
+      if (requestUrl.pathname === '/net/health') {
+        const body = JSON.stringify({ lan: false });
         response.writeHead(200, {
           'Content-Type': 'application/json; charset=utf-8',
           'Content-Length': Buffer.byteLength(body),

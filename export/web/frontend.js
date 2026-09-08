@@ -11,6 +11,8 @@
  * node; `elements` is optional and every write goes through `render()`.
  */
 
+import { sanitizeName, LIMITS } from './net/protocol.js';
+
 // Loader labels are internal asset names; the caption shows something a
 // player can read. Unmapped labels fall through unchanged.
 const CAPTIONS = {
@@ -29,10 +31,94 @@ const CAPTIONS = {
 
 export const SCREENS = ['welcome', 'loading', 'title', 'pause', 'class', 'error'];
 
+/**
+ * LAN lobby.
+ *
+ * The panel is pure presentation: it never opens a socket and never imports
+ * one. The game drives it through `setLanState()` and reads `getLanName()`,
+ * so a shell with no network at all still renders, still says "offline", and
+ * still lets the title screen start a single-player match. That separation is
+ * what keeps a missing server from being able to block the game.
+ */
+export const LAN_STATUSES = ['offline', 'connecting', 'connected', 'error'];
+
+// Same `hijacked.` prefix as `hijacked.graphics` and `hijacked.touchSensitivity`.
+export const LAN_NAME_KEY = 'hijacked.lanName';
+
+// Touching the property throws outright in a sandboxed frame, so the access is
+// guarded as well as the calls -- index.html does the same for PlayCounter.
+const defaultStorage = () => {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const lanPeers = (peers) => {
+  const rows = [];
+  const seen = new Set();
+  for (const peer of Array.isArray(peers) ? peers : []) {
+    const source = typeof peer === 'string' ? { id: peer } : peer ?? {};
+    const id = String(source.id ?? '');
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    rows.push({ id, name: sanitizeName(source.name, id) });
+  }
+  return rows;
+};
+
+const LAN_CSS = `
+.fe-lan {
+  display: none; flex-direction: column; gap: 9px; width: min(430px, 92vw);
+  padding: 12px 14px; text-align: left; background: rgba(6, 13, 18, .52);
+  border: 1px solid rgba(139, 173, 198, .22);
+}
+.fe-lan[data-visible="true"] { display: flex; }
+.fe-lan-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.fe-lan-title {
+  margin: 0; font: 600 12px/1.2 var(--fe-ui); letter-spacing: .2em;
+  text-transform: uppercase; color: rgba(220, 235, 245, .66);
+}
+.fe-lan-status {
+  font-size: 12px; letter-spacing: .06em; color: var(--fe-accent); text-align: right;
+}
+.fe-lan[data-status="offline"] .fe-lan-status { color: rgba(220, 235, 245, .46); }
+.fe-lan[data-status="error"] .fe-lan-status { color: #ff9b90; }
+.fe-lan-field { display: flex; align-items: center; gap: 9px; }
+.fe-lan-field label {
+  font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+  color: rgba(220, 235, 245, .58);
+}
+.fe-lan-input {
+  flex: 1; min-width: 0; padding: 6px 9px; color: #e6f2ff;
+  font: 600 14px var(--fe-ui); letter-spacing: .12em; text-transform: uppercase;
+  background: rgba(3, 8, 12, .62); border: 1px solid rgba(139, 173, 198, .28);
+}
+.fe-lan-input:focus { outline: none; border-color: var(--fe-accent); }
+.fe-lan-roster {
+  margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column;
+  gap: 3px; max-height: 136px; overflow-y: auto;
+}
+.fe-lan-peer {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  font-size: 13px; color: #cfe0ee;
+}
+.fe-lan-peer[data-self="true"] { color: var(--fe-accent); }
+.fe-lan-tag {
+  font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+  color: rgba(220, 235, 245, .5);
+}
+.fe-lan-empty, .fe-lan-note {
+  margin: 0; font-size: 12px; color: rgba(220, 235, 245, .5);
+}
+.fe-lan-note b { color: var(--fe-accent); font-weight: 600; }
+`;
+
 export class Frontend {
   constructor({
     elements = null, onPlay = null, onResume = null, onSelectWeapon = null, onOpenClass = null,
-    waitingForInput = false,
+    waitingForInput = false, storage = undefined,
   } = {}) {
     this.elements = elements;
     this.onPlay = onPlay;
@@ -54,6 +140,16 @@ export class Frontend {
     this.weaponOptions = [];
     this.selectedWeapon = null;
     this.classReturnScreen = 'title';
+
+    // The lobby starts offline on purpose: a game that never calls
+    // setLanState() -- no server, or the network layer failed to load at all
+    // -- reads as single-player rather than as a lobby stuck connecting.
+    this.storage = storage === undefined ? defaultStorage() : storage;
+    this.lan = { status: 'offline', peerId: null, hostId: null, peers: [], url: '', error: '' };
+    this.lanName = sanitizeName(this.readStored(LAN_NAME_KEY));
+    this.lanElements = null;
+    this.lanRosterKey = null;
+    this.lanEditing = false;
 
     this.bindElements();
     this.render();
@@ -293,6 +389,105 @@ export class Frontend {
     return result ?? selected;
   }
 
+  // ---------- LAN lobby ----------
+
+  readStored(key) {
+    try {
+      return this.storage?.getItem(key) ?? '';
+    } catch {
+      // Storage blocked. The lobby simply forgets the name between sessions.
+      return '';
+    }
+  }
+
+  writeStored(key, value) {
+    try {
+      this.storage?.setItem(key, value);
+    } catch {
+      // Nothing to do; the name still applies to this session.
+    }
+  }
+
+  /** The name this player goes by. Always a valid wire name, never empty. */
+  getLanName() {
+    return this.lanName;
+  }
+
+  /**
+   * Set and persist the display name. `protocol.sanitizeName` owns the rules
+   * -- length, control characters, whitespace, casing -- so the lobby cannot
+   * drift from what the server and the scoreboard will accept.
+   *
+   * This only stores and renders. Announcing the change is `action()`'s job,
+   * so the game is not told about a name it set itself.
+   */
+  setLanName(name) {
+    const next = sanitizeName(name, this.lanName || undefined);
+    if (next !== this.lanName) {
+      this.lanName = next;
+      this.writeStored(LAN_NAME_KEY, next);
+    }
+    this.render();
+    return this.lanName;
+  }
+
+  /**
+   * Mirror the network layer's view of the lobby. Fields left undefined keep
+   * their current value, so a status change does not have to re-send the
+   * roster and a dropped connection does not blank the names mid-frame.
+   */
+  setLanState({ status, peerId, hostId, peers, url, error } = {}) {
+    const lan = this.lan;
+    if (status !== undefined) lan.status = LAN_STATUSES.includes(status) ? status : 'offline';
+    if (peerId !== undefined) lan.peerId = peerId == null ? null : String(peerId);
+    if (hostId !== undefined) lan.hostId = hostId == null ? null : String(hostId);
+    if (peers !== undefined) lan.peers = lanPeers(peers);
+    if (url !== undefined) lan.url = url == null ? '' : String(url);
+    if (error !== undefined) {
+      lan.error = error == null ? '' : String(error instanceof Error ? error.message : error);
+    }
+    this.render();
+    return this.getLanState();
+  }
+
+  /** The roster as drawn: who is host, who is you. */
+  get lanRoster() {
+    return this.lan.peers.map((peer) => {
+      const host = peer.id === this.lan.hostId;
+      const self = peer.id === this.lan.peerId;
+      const tags = [host ? 'host' : null, self ? 'you' : null].filter(Boolean);
+      return { id: peer.id, name: peer.name, host, self, tag: tags.join(' · ') };
+    });
+  }
+
+  get lanStatusText() {
+    const { status, error, peers } = this.lan;
+    if (status === 'error') return error ? `Error — ${error}` : 'Connection failed';
+    if (status === 'connecting') return 'Connecting…';
+    if (status === 'connected') return `Connected · ${peers.length} in lobby`;
+    return 'Offline — single player';
+  }
+
+  /** The line the host reads out to the room. */
+  get lanNoteText() {
+    if (this.lan.url) return `Others on this WiFi join at ${this.lan.url}`;
+    if (this.lan.status === 'offline') return 'No LAN server found. Playing solo.';
+    return '';
+  }
+
+  /** Compact, serializable lobby view for the debug API. */
+  getLanState() {
+    return {
+      status: this.lan.status,
+      peerId: this.lan.peerId,
+      hostId: this.lan.hostId,
+      url: this.lan.url,
+      error: this.lan.error,
+      name: this.lanName,
+      peers: this.lanRoster,
+    };
+  }
+
   fail(message) {
     this.screen = 'error';
     this.playing = false;
@@ -336,6 +531,7 @@ export class Frontend {
       percent: Math.round(this.fraction * 100),
       caption: this.screen === 'loading' ? this.caption : '',
       selectedWeapon: this.selectedWeapon,
+      lan: { status: this.lan.status, name: this.lanName, peers: this.lan.peers.length },
     };
   }
 
@@ -359,20 +555,129 @@ export class Frontend {
         this.chooseWeapon(card.dataset.weaponId);
       });
     }
+    this.buildLanPanel();
+  }
+
+  /**
+   * Build the lobby panel from script.
+   *
+   * The shell's other screens are authored in index.html, but the panel is
+   * built here so a page that predates LAN play gains it without an edit --
+   * and so the markup and the code that fills it cannot drift apart. Its
+   * stylesheet is injected once, using the same `--fe-accent` and `--fe-ui`
+   * tokens as the rest of the menu.
+   */
+  buildLanPanel() {
+    const el = this.elements;
+    const doc = typeof document === 'undefined' ? null : document;
+    if (!el?.root || !doc?.createElement) return null;
+
+    const make = (tag, className, parent, text) => {
+      const node = doc.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      parent?.appendChild?.(node);
+      return node;
+    };
+
+    if (!doc.getElementById?.('fe-lan-style')) {
+      const style = make('style', null, doc.head);
+      style.id = 'fe-lan-style';
+      style.textContent = LAN_CSS;
+    }
+
+    const panel = doc.createElement('section');
+    panel.className = 'fe-lan';
+    panel.dataset.visible = 'false';
+    panel.setAttribute?.('aria-label', 'LAN game');
+    // The shell starts the game on any click, so the panel swallows its own.
+    // Without this, reaching for the name field would deploy you instead.
+    panel.addEventListener('click', (event) => event.stopPropagation());
+
+    const head = make('div', 'fe-lan-head', panel);
+    make('h2', 'fe-lan-title', head, 'LAN game');
+    const status = make('span', 'fe-lan-status', head, '');
+
+    const field = make('div', 'fe-lan-field', panel);
+    const label = make('label', null, field, 'Name');
+    const name = make('input', 'fe-lan-input', field);
+    name.type = 'text';
+    name.id = 'fe-lan-name';
+    name.maxLength = LIMITS.MAX_NAME_LENGTH;
+    name.value = this.lanName;
+    label.setAttribute?.('for', name.id);
+    // Committed edits, not keystrokes: one `hello` per name the player
+    // settles on rather than one per letter typed.
+    name.addEventListener('input', () => { this.lanEditing = true; });
+    name.addEventListener('change', () => this.action('lan-name', name.value));
+    name.addEventListener('blur', () => this.action('lan-name', name.value));
+
+    const roster = make('ul', 'fe-lan-roster', panel);
+    const note = make('p', 'fe-lan-note', panel, '');
+
+    const content = el.root.querySelector?.('.fe-content') ?? el.root;
+    const anchor = el.root.querySelector?.('.fe-controls');
+    if (anchor && content.insertBefore) content.insertBefore(panel, anchor);
+    else content.appendChild?.(panel);
+
+    this.lanElements = { panel, status, name, roster, note, make };
+    return panel;
+  }
+
+  renderLan() {
+    const lan = this.lanElements;
+    if (!lan) return;
+    lan.panel.dataset.visible = String(this.screen === 'title' || this.screen === 'pause');
+    lan.panel.dataset.status = this.lan.status;
+    lan.status.textContent = this.lanStatusText;
+    lan.note.textContent = this.lanNoteText;
+    // Never overwrite a field the player is mid-edit in; the sanitized value
+    // lands on blur instead, where it cannot move the caret under them.
+    if (!this.lanEditing && lan.name.value !== this.lanName) lan.name.value = this.lanName;
+
+    const roster = this.lanRoster;
+    // render() runs on every progress event, so the list is only rebuilt when
+    // it would actually differ.
+    const key = roster.map((peer) => `${peer.id} ${peer.name} ${peer.tag}`).join('');
+    if (key === this.lanRosterKey) return;
+    this.lanRosterKey = key;
+
+    const rows = roster.map((peer) => {
+      const row = lan.make('li', 'fe-lan-peer');
+      row.dataset.peerId = peer.id;
+      row.dataset.host = String(peer.host);
+      row.dataset.self = String(peer.self);
+      lan.make('span', 'fe-lan-name', row, peer.name);
+      lan.make('span', 'fe-lan-tag', row, peer.tag);
+      return row;
+    });
+    if (!rows.length) rows.push(lan.make('li', 'fe-lan-empty', null, 'Nobody else on the LAN yet'));
+    lan.roster.replaceChildren(...rows);
   }
 
   /** Shell buttons, including class navigation and card confirmation. */
-  action(name) {
+  action(name, value) {
     if (name === 'resume') return this.play();
     if (name === 'class') return this.openClass();
     if (name === 'class-back') return this.closeClass();
     if (name === 'class-confirm') return this.confirmClass();
+    if (name === 'lan-name') {
+      // The player edited the name, so the game is told to send a `hello`.
+      // Only a name that actually changed is announced: a field that blurs
+      // straight after a change event must not send the same name twice.
+      this.lanEditing = false;
+      const previous = this.lanName;
+      const next = this.setLanName(value);
+      if (next !== previous) this.elements?.onAction?.(name, next);
+      return next;
+    }
     return this.elements?.onAction?.(name);
   }
 
   render() {
     const el = this.elements;
     if (!el) return;
+    this.renderLan();
     const loading = this.screen === 'loading';
     const determinate = !loading || this.determinate;
 

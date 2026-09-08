@@ -39,11 +39,19 @@ repository root:
 
 ```powershell
 npm install
-python -m http.server 8000 --directory export/web
+npm run lan
 ```
 
 Open <http://localhost:8000>. The viewer must be served over HTTP; opening
 `index.html` directly will not load its modules and binary assets.
+
+`npm run lan` also prints a LAN address, and anyone on the same WiFi who opens
+it joins the match. See [LAN multiplayer](#lan-multiplayer). A plain static
+server still works if you only want single player:
+
+```powershell
+python -m http.server 8000 --directory export/web
+```
 
 Controls:
 
@@ -73,6 +81,115 @@ stronger texture filtering. Both Auto and Quality smooth the scene and weapon
 edges using supported HDR multisampling, with FXAA as the fallback. Resolution
 stays within pixel and GPU size limits. Choose a preset from the title or pause
 menu; the selection is saved on the device.
+
+## LAN multiplayer
+
+`npm run lan` serves the game and runs a small relay beside it:
+
+```
+Claude of Duty — LAN server
+  Local    http://localhost:8000
+  LAN      http://192.168.1.42:8000   <- share this on the WiFi
+```
+
+Anyone on the same network who opens that address joins the same free-for-all.
+Up to eight people; the six bots stay in the match as extra combatants, so a
+two-player game still feels populated. Enter a name on the title screen and the
+lobby shows who else is in.
+
+No internet is needed. Three.js and Recast are served from `export/web/vendor`
+rather than a CDN, so the WiFi does not need an uplink. Run `npm run vendor`
+after changing those dependencies.
+
+### How it works
+
+One browser is elected **host** — the oldest connection — and it owns the bots
+and the scoreboard. Everyone else replicates them. Every client owns its own
+player. The server itself has no game rules; it assigns peer ids, keeps the
+join order, and forwards messages.
+
+Damage follows one rule:
+
+> Damage is shooter-reported. Death is victim-confirmed. Scoring is
+> host-recorded.
+
+You raycast locally and announce the hit; the machine that owns the body
+decides whether it died; the host is the only machine that writes the
+scoreboard. This keeps your own spawn protection, regeneration and death timing
+on your own machine, so a death never feels stolen. It also means the shooter
+is trusted about whether a shot connected, which is the right trade among
+people in one room and the wrong one on the open internet. Sanity checks
+(per-weapon damage ceiling, rate, range) catch bugs, not adversaries.
+
+Remote players are drawn with the bot rig — the same baked poses and the same
+torso/head/legs hitboxes — so headshots on your friends work through the code
+that already shipped. Bodies render 100 ms in the past, interpolated between
+real snapshots, which at LAN latency looks exact.
+
+The host keeps the bots and the match clock running even while sitting in its
+own pause menu. Only that player is paused; the room is not. (Bot simulation
+originally hung off the local player's own pause state, so the host pressing
+Escape stopped the world for everybody else.)
+
+If the host closes their tab, the next-oldest player is promoted and the match
+continues. Everyone else keeps playing: the departed player's body and
+scoreboard row are removed, scores are preserved, and the new host picks the
+bots up from where they were replicated rather than snapping them to stale
+navmesh agents. Expect a brief hitch as it takes over. If that player leaves
+too, the next one is promoted, and so on.
+
+A player who leaves keeps their entries in the kill feed -- that is a record of
+what happened -- but drops off the standings, which list who is still playing.
+
+### A host that stops hosting
+
+A slow host does not slow anyone else's game: guests keep their own frame rate,
+and player-versus-player never touches the host — a hit goes shooter, server,
+victim. Bot simulation is delta-time based, so a struggling host makes bot
+motion coarser rather than slower.
+
+A host that stops entirely is the real risk, because its socket stays perfectly
+healthy and nothing else notices. The server therefore watches the host-only
+channel: if the host has broadcast before and then goes quiet for six seconds
+while somebody else is present, the role moves to the next-oldest player. A
+host that has never broadcast is left alone, since a freshly joined one spends
+a long time loading the map before its first `botState`.
+
+A demotion sticks. When the old host recovers it comes back as a guest: it
+stops simulating, starts replicating, and its bots snap to the new host's
+truth. It cannot take the role back by simply resuming — the relay gates
+host-only messages on its own record of who is host, so a recovered host's
+`botState` is dropped rather than relayed, and there is never a window with two
+hosts. Any scores it recorded while the room had moved on are discarded in
+favour of the new host's scoreboard, which is what having a single authority
+means. It regains the role only if the current host later leaves.
+
+A player who actually disconnects and reconnects returns as a new peer with a
+new id and a fresh score; reconnects do not preserve identity.
+
+### One slow machine cannot slow the room
+
+A stalled laptop stops draining its socket, and a relay that queued for it
+would spend everyone's time on one client's backlog. Instead, state snapshots
+are dropped to a congested peer — the next snapshot supersedes them anyway —
+while events like hits and deaths are always delivered. A peer that falls
+hopelessly behind is disconnected and left to reconnect cleanly.
+
+### Testing it
+
+`npm run ai:lan` boots the real server, opens two independent browsers, joins
+both, stands them face to face, and asserts that each sees the other, that
+damage crosses the wire, that the kill is scored, that both scoreboards agree,
+and that closing the host promotes the survivor with the bots still running.
+Artifacts land in `artifacts/ai-lan`.
+
+`npm run ai:lan3` runs the three-player case. It exists because a bystander --
+the player who was neither the host nor the one promoted -- is where migration
+actually breaks, and this caught a real bug: the server announces a departure
+before it announces the new host, so the peer about to be promoted saw the old
+host leave while still a guest, skipped dropping its combatant, and then
+published a scoreboard that kept the departed player for the rest of the
+match.
 
 ## Frontend
 
