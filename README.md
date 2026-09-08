@@ -197,8 +197,14 @@ and player-versus-player never touches the host — a hit goes shooter, server,
 victim. Bot simulation is delta-time based, so a struggling host makes bot
 motion coarser rather than slower.
 
-A host that stops entirely is the real risk, because its socket stays perfectly
-healthy and nothing else notices. The server therefore watches the host-only
+A client that dies without closing -- a shut laptop, a phone that lost signal --
+leaves its socket ESTABLISHED, and through a tunnel the relay cannot tell the
+browser behind it has gone. Since a relay holds one room, that zombie does not
+just take a slot, it keeps the room alive so nobody else can open one. Every
+socket is therefore pinged every 30 seconds and dropped if it misses two.
+
+A host that stops entirely is a separate risk, because its socket stays
+perfectly healthy and nothing else notices. The server therefore watches the host-only
 channel: if the host has broadcast before and then goes quiet for six seconds
 while somebody else is present, the role moves to the next-oldest player. A
 host that has never broadcast is left alone, since a freshly joined one spends

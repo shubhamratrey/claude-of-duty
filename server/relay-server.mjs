@@ -28,6 +28,40 @@ import {
 
 const HEALTH_PATH = '/relay/health';
 
+/**
+ * Evict sockets that stopped answering.
+ *
+ * A closed laptop or a phone that lost signal leaves its TCP connection
+ * ESTABLISHED -- especially through a tunnel, which has its own keepalives to
+ * the edge and cannot tell the browser behind it has gone. The relay would
+ * never see a close event, and because it holds exactly one room, that zombie
+ * does not merely occupy a slot: it keeps the room alive forever and nobody
+ * else can open one.
+ *
+ * So every sweep asks each socket to prove it is there. A socket that has not
+ * answered the previous ping is gone, whatever the kernel believes.
+ *
+ * @param {Iterable} clients live sockets
+ * @param {(socket: any) => void} terminate
+ * @param {(socket: any) => void} ping
+ * @returns {{pinged: number, terminated: number}}
+ */
+export function sweepHeartbeat(clients, { terminate, ping } = {}) {
+  let pinged = 0;
+  let terminated = 0;
+  for (const socket of clients ?? []) {
+    if (socket.awaitingPong) {
+      terminated += 1;
+      terminate?.(socket);
+      continue;
+    }
+    socket.awaitingPong = true;
+    pinged += 1;
+    ping?.(socket);
+  }
+  return { pinged, terminated };
+}
+
 export async function createRelayServer({
   port = 8787,
   host = '0.0.0.0',
@@ -37,6 +71,7 @@ export async function createRelayServer({
   hostSilenceMs = 6000,
   hostWatchIntervalMs = 1000,
   maxFramesPerSecond = 200,
+  heartbeatMs = 30000,
 } = {}) {
   const startedAt = performance.now();
   // Clients derive their clock offset from this, so it must be monotonic and
@@ -47,7 +82,7 @@ export async function createRelayServer({
   const stats = {
     relayed: 0, malformedDropped: 0, spoofedServerDropped: 0, hostOnlyDropped: 0,
     backpressureDropped: 0, slowPeersDropped: 0, rateLimited: 0,
-    badCode: 0, joinTimeouts: 0, unadmittedDropped: 0,
+    badCode: 0, joinTimeouts: 0, unadmittedDropped: 0, zombiesEvicted: 0,
   };
 
   // Admitted members, and sockets that have connected but not yet joined.
@@ -266,6 +301,11 @@ export async function createRelayServer({
       }
     });
 
+    // Answering a ping is the only evidence that anyone is still on the far
+    // end of this socket.
+    socket.awaitingPong = false;
+    socket.on('pong', () => { socket.awaitingPong = false; });
+
     socket.on('error', () => {
       // 'close' always follows, so cleanup happens there exactly once.
     });
@@ -310,6 +350,20 @@ export async function createRelayServer({
   const watchdog = setInterval(checkHostLiveness, hostWatchIntervalMs);
   watchdog.unref?.();
 
+  const runHeartbeat = () => {
+    const result = sweepHeartbeat(wss.clients, {
+      ping: (socket) => { try { socket.ping(); } catch { /* close will follow */ } },
+      terminate: (socket) => {
+        stats.zombiesEvicted += 1;
+        log('[relay] ! a client stopped answering - dropping it');
+        socket.terminate();
+      },
+    });
+    return result;
+  };
+  const heartbeat = setInterval(runHeartbeat, heartbeatMs);
+  heartbeat.unref?.();
+
   const address = server.address();
   const boundPort = typeof address === 'object' && address ? address.port : port;
   const reachable = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
@@ -325,8 +379,10 @@ export async function createRelayServer({
     healthUrl: `http://${reachable}:${boundPort}${HEALTH_PATH}`,
     serverTime,
     checkHostLiveness,
+    runHeartbeat,
     async close() {
       clearInterval(watchdog);
+      clearInterval(heartbeat);
       for (const socket of wss.clients) socket.terminate();
       await new Promise((resolve) => wss.close(resolve));
       server.closeAllConnections();
