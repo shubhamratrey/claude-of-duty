@@ -282,6 +282,18 @@ export async function createLanServer({
 
   const wss = new WebSocketServer({ server, path: '/net' });
 
+  // ws re-emits the HTTP server's errors on itself, so a failed listen -- a
+  // busy port, nearly always -- arrives here as well as at the listen promise
+  // below. With no listener that becomes an unhandled 'error' event and takes
+  // the process down with a stack trace where a sentence would do. Before the
+  // server is up the listen promise owns the report; after it, this is the only
+  // place a socket-layer failure would be seen at all.
+  let listening = false;
+  wss.on('error', (error) => {
+    if (!listening) return;
+    log(`[lan] ! socket server error: ${error?.message ?? error}`);
+  });
+
   // Backpressure.
   //
   // One stalled laptop must not slow the room down. A tab that is mid-GC,
@@ -442,6 +454,7 @@ export async function createLanServer({
     });
   });
 
+  listening = true;
   watchdog = setInterval(checkHostLiveness, hostWatchIntervalMs);
   watchdog.unref?.();
 

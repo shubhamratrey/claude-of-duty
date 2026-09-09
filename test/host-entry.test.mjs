@@ -8,6 +8,7 @@
 // function with no side effects, and that is what is tested here.
 
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
 import {
@@ -15,6 +16,7 @@ import {
   bonjourHostname,
   PORT_ATTEMPTS,
   hostBanner,
+  listenOnFirstFreePort,
   locateWebDir,
   portSequence,
   qrTarget,
@@ -181,4 +183,35 @@ test('the QR code still encodes the numeric LAN URL, not the .local name', () =>
     qrTarget({ port: 8000, addresses: ['192.168.10.183'], hostname: 'Shubhams-MacBook' }),
     'http://192.168.10.183:8000',
   );
+});
+
+test('a busy port is stepped over rather than reported to the host', async (t) => {
+  // A real listener, because the failure mode this covers is not the EADDRINUSE
+  // itself but who hears about it: ws re-emits the HTTP server's errors, and an
+  // unhandled one there kills the process before any fallback can run.
+  const blocker = http.createServer();
+  await new Promise((resolve) => blocker.listen(0, '127.0.0.1', resolve));
+  const busy = blocker.address().port;
+  t.after(() => new Promise((resolve) => blocker.close(resolve)));
+
+  const lan = await listenOnFirstFreePort([busy, busy + 1, busy + 2], {
+    host: '127.0.0.1', log: () => {},
+  });
+  t.after(() => lan.close());
+  assert.notEqual(lan.port, busy);
+  assert.ok(lan.port > busy && lan.port <= busy + 2, `landed on ${lan.port}`);
+});
+
+test('every port being taken is reported, not retried forever', async () => {
+  const blocker = http.createServer();
+  await new Promise((resolve) => blocker.listen(0, '127.0.0.1', resolve));
+  const busy = blocker.address().port;
+  try {
+    await assert.rejects(
+      listenOnFirstFreePort([busy], { host: '127.0.0.1', log: () => {} }),
+      /in use/,
+    );
+  } finally {
+    await new Promise((resolve) => blocker.close(resolve));
+  }
 });
