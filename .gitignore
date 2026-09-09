@@ -42,6 +42,7 @@
 !/.tools/prune-deploy.sh
 !/.tools/stage_cloudflare.mjs
 !/.tools/vendor_deps.mjs
+!/.tools/package_mac.mjs
 !/.tools/perf_probe.mjs
 !/.tools/xanim_to_json.mjs
 !/.tools/extract_t6_sab_audio.mjs

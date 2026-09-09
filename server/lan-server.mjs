@@ -81,6 +81,21 @@ export function resolveStaticPath(root, urlPath) {
   return filename;
 }
 
+/**
+ * `<hostname>.local`, the Bonjour name macOS already publishes for this Mac.
+ *
+ * Friendlier to read out than four numbers and a colon, and every Mac, iPhone
+ * and iPad on the WiFi resolves it with no setup. Returns null when there is no
+ * name to publish, so callers can fall back to the numeric address rather than
+ * printing `http://.local:8000`.
+ */
+export function bonjourHostname(hostname = os.hostname()) {
+  const trimmed = String(hostname ?? '').trim().replace(/\.+$/, '');
+  const base = trimmed.replace(/\.local$/i, '');
+  if (base.length === 0) return null;
+  return `${base.toLowerCase()}.local`;
+}
+
 /** Non-internal IPv4 addresses, which are the ones worth reading aloud. */
 export function lanAddresses() {
   return Object.values(os.networkInterfaces())
@@ -228,7 +243,14 @@ export async function createLanServer({
           hostId: roster.hostId,
           serverTime: serverTime(),
           joinUrl: addresses.length ? `http://${addresses[0]}:${listenPort}` : null,
-          joinUrls: addresses.map((address) => `http://${address}:${listenPort}`),
+          // The .local name goes last: it is the nicest one to read out, but
+          // it is also the one most likely to be missing or wrong, so a
+          // consumer taking the first entry still gets a numeric address.
+          joinUrls: [
+            ...addresses.map((address) => `http://${address}:${listenPort}`),
+            ...(addresses.length > 0 && bonjourHostname()
+              ? [`http://${bonjourHostname()}:${listenPort}`] : []),
+          ],
         });
         response.writeHead(200, {
           'Content-Type': 'application/json; charset=utf-8',
