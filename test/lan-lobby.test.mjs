@@ -361,6 +361,33 @@ test('an action with no value still forwards cleanly', () => {
   assert.deepEqual(seen, [['respawn', undefined]]);
 });
 
+test('a public origin does not advertise itself for WiFi play', () => {
+  // This is what sent someone hunting a fault that was not there: the panel
+  // fell back to location.origin, so a page served from a public deployment
+  // read "Others on this WiFi join at https://playops.netlify.app" -- an
+  // address nobody on the WiFi can use, for a mode that cannot work there.
+  const frontend = new Frontend({ storage: null });
+  frontend.setLanState({ status: 'offline', url: '', lanPossible: false });
+  const note = frontend.lanNoteText;
+  assert.doesNotMatch(note, /join at/, note);
+  assert.match(note, /npm run lan/);
+  assert.match(note, /Relay/);
+});
+
+test('a real LAN server is still advertised by the address it gave us', () => {
+  const frontend = new Frontend({ storage: null });
+  frontend.setLanState({
+    status: 'connected', url: 'http://192.168.1.140:8000', lanPossible: true,
+  });
+  assert.equal(frontend.lanNoteText, 'Others on this WiFi join at http://192.168.1.140:8000');
+});
+
+test('a private origin with no server says so without blaming the mode', () => {
+  const frontend = new Frontend({ storage: null });
+  frontend.setLanState({ status: 'offline', url: '', lanPossible: true });
+  assert.equal(frontend.lanNoteText, 'No LAN server found. Playing solo.');
+});
+
 test('the lobby state machine works with no DOM at all', () => {
   const frontend = new Frontend({ storage: null });
   frontend.setLanState({ status: 'connected', peerId: 'p1', hostId: 'p2', peers: [{ id: 'p1' }] });
@@ -377,6 +404,7 @@ test('the lobby state machine works with no DOM at all', () => {
     roomCode: null,
     roomRequired: false,
     joinError: '',
+    lanPossible: true,
     games: [],
     joinedGame: null,
   });

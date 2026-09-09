@@ -2571,7 +2571,8 @@ function refreshLanPanel(status) {
     peerId: net?.peerId ?? null,
     hostId: net?.hostId ?? null,
     peers: net?.peers ?? [],
-    url: lanJoinUrl ?? location.origin,
+    url: lanJoinUrl ?? '',
+    lanPossible: lanEligible,
     roomCode: net?.roomCode ?? null,
     roomRequired: Boolean(net?.roomRequired),
   });
@@ -2613,14 +2614,15 @@ async function startLanSession() {
   // deployment retrying a socket against the CDN. A pasted relay address is a
   // deliberate act, so it bypasses that entirely.
   if (!relay && !lanEligible) {
-    frontend.setLanState?.({ status: 'offline', url: lanJoinUrl ?? location.origin });
+    frontend.setLanState?.({ status: 'offline', url: lanJoinUrl ?? '', lanPossible: lanEligible });
     return null;
   }
   if (!(await lanServerPresent(target.healthUrl, relay))) {
     frontend.setLanState?.({
       status: relay ? 'error' : 'offline',
       error: relay ? 'No relay answered at that address.' : '',
-      url: lanJoinUrl ?? location.origin,
+      url: lanJoinUrl ?? '',
+      lanPossible: lanEligible,
     });
     return null;
   }

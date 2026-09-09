@@ -274,6 +274,11 @@ export class Frontend {
       // Discovery. `games` is what the local server's beacons found;
       // `joinedGame` is set while this client is playing on someone else's.
       games: [], joinedGame: null,
+      // Whether this origin can host LAN play at all. False on a public
+      // deployment, where the page cannot reach a server on your network:
+      // LAN mode talks to /net on its own origin, and an HTTPS page is
+      // forbidden from opening a plain ws:// socket to anywhere else.
+      lanPossible: true,
     };
     this.lanName = sanitizeName(this.readStored(LAN_NAME_KEY));
     this.lan.relayUrl = String(this.readStored(RELAY_URL_KEY) ?? '');
@@ -570,7 +575,7 @@ export class Frontend {
    */
   setLanState({
     status, peerId, hostId, peers, url, error,
-    mode, roomCode, roomRequired, joinError,
+    mode, roomCode, roomRequired, joinError, lanPossible,
     games, joinedGame,
   } = {}) {
     const lan = this.lan;
@@ -579,6 +584,7 @@ export class Frontend {
     if (roomCode !== undefined) lan.roomCode = roomCode == null ? null : String(roomCode);
     if (roomRequired !== undefined) lan.roomRequired = Boolean(roomRequired);
     if (joinError !== undefined) lan.joinError = joinError == null ? '' : String(joinError);
+    if (lanPossible !== undefined) lan.lanPossible = Boolean(lanPossible);
     if (peerId !== undefined) lan.peerId = peerId == null ? null : String(peerId);
     if (hostId !== undefined) lan.hostId = hostId == null ? null : String(hostId);
     if (peers !== undefined) lan.peers = lanPeers(peers);
@@ -641,7 +647,16 @@ export class Frontend {
       if (this.lan.status === 'connecting') return 'Reaching the relay…';
       return 'Paste the address of a relay to play with people anywhere.';
     }
+    // Only claim WiFi play when a LAN server actually answered and handed us
+    // the address to read out. This used to fall back to location.origin, so a
+    // page served from a public deployment cheerfully advertised itself as the
+    // place to join over WiFi -- which cannot work and sent people looking for
+    // a fault that was not there.
     if (this.lan.url) return `Others on this WiFi join at ${this.lan.url}`;
+    if (!this.lan.lanPossible) {
+      return 'WiFi play needs the game served from your own network — run ' +
+        '`npm run lan` there. From here, use Relay.';
+    }
     if (this.lan.status === 'offline') return 'No LAN server found. Playing solo.';
     return '';
   }
@@ -681,6 +696,7 @@ export class Frontend {
       roomCode: this.lan.roomCode,
       roomRequired: this.lan.roomRequired,
       joinError: this.lan.joinError,
+      lanPossible: this.lan.lanPossible,
       games: this.lan.games,
       joinedGame: this.lan.joinedGame,
     };
