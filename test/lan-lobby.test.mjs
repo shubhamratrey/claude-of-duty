@@ -126,8 +126,26 @@ function lobby(options = {}) {
     name: panel.querySelector('.fe-lan-input'),
     roster: panel.querySelector('.fe-lan-roster'),
     note: panel.querySelector('.fe-lan-note'),
+    gamesBox: panel.querySelector('.fe-lan-games'),
+    games: panel.querySelector('.fe-lan-game-list'),
+    joined: panel.querySelector('.fe-lan-joined'),
+    joinedName: panel.querySelector('.fe-lan-joined-name'),
+    back: panel.querySelector('.fe-lan-back'),
   };
 }
+
+/** The discovered-games list as drawn, one entry per row. */
+const gameRows = (view) => view.games.children.map((row) => ({
+  text: row.textContent,
+  id: row.dataset.gameId,
+  compatible: row.dataset.compatible,
+  join: row.querySelector('.fe-lan-game-join'),
+}));
+
+const A_GAME = {
+  id: 'aaa1', name: 'Priyas MacBook Air', address: '192.168.1.9', port: 8000,
+  url: 'http://192.168.1.9:8000', players: 1, version: '1.0.0', compatible: true,
+};
 
 const rows = (view) => view.roster.children.map((row) => ({
   text: row.textContent,
@@ -359,6 +377,129 @@ test('the lobby state machine works with no DOM at all', () => {
     roomCode: null,
     roomRequired: false,
     joinError: '',
+    games: [],
+    joinedGame: null,
   });
   assert.deepEqual(frontend.getState().lan, { status: 'connected', name: 'PLAYER', peers: 1 });
+});
+
+test('games on this WiFi are listed with a name, a headcount and a Join', () => {
+  const view = lobby();
+  view.frontend.setReady();
+  assert.equal(view.gamesBox.dataset.visible, 'false', 'no games means no empty heading');
+
+  view.frontend.setLanState({
+    games: [
+      A_GAME,
+      { ...A_GAME, id: 'bbb2', name: 'Shubhams MacBook', address: '192.168.1.42', players: 3 },
+    ],
+  });
+
+  assert.equal(view.gamesBox.dataset.visible, 'true');
+  assert.match(view.gamesBox.textContent, /Games on this WiFi/);
+  assert.deepEqual(gameRows(view).map((row) => [row.id, row.text]), [
+    ['aaa1', 'Priyas MacBook Air 1 player Join'],
+    ['bbb2', 'Shubhams MacBook 3 players Join'],
+  ]);
+
+  view.frontend.setLanState({ games: [] });
+  assert.equal(view.gamesBox.dataset.visible, 'false', 'the last game closing empties the list');
+  assert.deepEqual(gameRows(view), []);
+});
+
+test('an incompatible game says so instead of offering a Join', () => {
+  const view = lobby();
+  view.frontend.setLanState({
+    games: [
+      { ...A_GAME, id: 'old', name: 'Rahuls Mac', compatible: false, version: '0.9.0' },
+      A_GAME,
+    ],
+  });
+
+  // Sorted by name, so Priya's comes before Rahul's whatever order they arrived.
+  const [current, older] = gameRows(view);
+  assert.equal(older.id, 'old');
+  assert.equal(older.compatible, 'false');
+  assert.equal(older.join, null, 'two builds that cannot talk must never be allowed to try');
+  assert.match(older.text, /different version/);
+  assert.ok(current.join, 'the compatible game is still joinable');
+});
+
+test('clicking Join forwards the address the beacon was seen at', () => {
+  const view = lobby();
+  view.frontend.setLanState({ games: [A_GAME] });
+
+  gameRows(view)[0].join.dispatch('click');
+  assert.deepEqual(view.actions, [
+    ['join-game', { address: '192.168.1.9', port: 8000, name: 'Priyas MacBook Air' }],
+  ]);
+});
+
+test('a Join click does not also deploy you into your own match', () => {
+  const plays = [];
+  const view = lobby({ onPlay: () => plays.push('play') });
+  view.frontend.setReady();
+  view.frontend.setLanState({ games: [A_GAME] });
+
+  let stopped = false;
+  gameRows(view)[0].join.dispatch('click', { stopPropagation: () => { stopped = true; } });
+  assert.equal(stopped, true);
+  assert.deepEqual(plays, []);
+});
+
+test('once joined the panel names the game and offers the way back', () => {
+  const view = lobby();
+  view.frontend.setReady();
+  view.frontend.setLanState({
+    games: [A_GAME],
+    joinedGame: { name: 'Priyas MacBook Air', url: 'http://192.168.1.9:8000' },
+  });
+
+  assert.equal(view.joined.dataset.visible, 'true');
+  assert.equal(view.joinedName.textContent, 'Playing on Priyas MacBook Air');
+  assert.equal(view.gamesBox.dataset.visible, 'false',
+    'the list is for choosing a game, not for reading while in one');
+
+  view.back.dispatch('click');
+  assert.deepEqual(view.actions, [['leave-game', undefined]]);
+
+  view.frontend.setLanState({ joinedGame: null });
+  assert.equal(view.joined.dataset.visible, 'false');
+  assert.equal(view.gamesBox.dataset.visible, 'true');
+});
+
+test('the list belongs to LAN mode, not to a pasted relay address', () => {
+  const view = lobby();
+  view.frontend.setLanState({ games: [A_GAME] });
+  assert.equal(view.gamesBox.dataset.visible, 'true');
+  view.frontend.setLanState({ mode: 'relay' });
+  assert.equal(view.gamesBox.dataset.visible, 'false');
+  view.frontend.setLanState({ mode: 'lan' });
+  assert.equal(view.gamesBox.dataset.visible, 'true');
+});
+
+test('games with nothing to connect to are dropped rather than drawn', () => {
+  const view = lobby();
+  view.frontend.setLanState({
+    games: [
+      null,
+      'nonsense',
+      { id: '', address: '10.0.0.1', port: 8000 },
+      { id: 'noaddr', port: 8000 },
+      { id: 'noport', address: '10.0.0.1' },
+      { id: 'badport', address: '10.0.0.1', port: 99999 },
+      { id: 'dupe', address: '10.0.0.1', port: 8000, name: 'Mac' },
+      { id: 'dupe', address: '10.0.0.2', port: 8000, name: 'Mac again' },
+    ],
+  });
+  assert.deepEqual(view.frontend.getLanState().games.map((game) => game.id), ['dupe']);
+  assert.equal(view.frontend.getLanState().games[0].name, 'Mac');
+});
+
+test('a nameless game is still identifiable, and unknown compatibility is optimistic', () => {
+  const view = lobby();
+  view.frontend.setLanState({ games: [{ id: 'g', address: '10.0.0.5', port: 8001 }] });
+  const [row] = gameRows(view);
+  assert.equal(row.text, '10.0.0.5 0 players Join');
+  assert.ok(row.join);
 });

@@ -74,6 +74,53 @@ const lanPeers = (peers) => {
   return rows;
 };
 
+/**
+ * The discovered-games list, normalised.
+ *
+ * The rows come from a server's `/net/discover`, so they are treated the way
+ * every other network payload is: a row that could not produce a working
+ * `ws://` URL is dropped rather than drawn as a Join button that cannot work.
+ */
+const lanGameRows = (games) => {
+  const rows = [];
+  const seen = new Set();
+  for (const entry of Array.isArray(games) ? games : []) {
+    if (!entry || typeof entry !== 'object') continue;
+    const id = String(entry.id ?? '');
+    const address = String(entry.address ?? '').trim();
+    const port = Number(entry.port);
+    if (!id || seen.has(id) || !address) continue;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) continue;
+    seen.add(id);
+    const players = Math.max(0, Math.trunc(Number(entry.players) || 0));
+    rows.push({
+      id,
+      // A game with no name is still a game you can point at.
+      name: String(entry.name || address),
+      address,
+      port,
+      url: String(entry.url || `http://${address}:${port}`),
+      players,
+      version: String(entry.version ?? ''),
+      // Only an explicit false locks the Join button. A server that does not
+      // report compatibility at all is one this build has no reason to refuse.
+      compatible: entry.compatible !== false,
+    });
+  }
+  // By name, so the list does not reshuffle under a cursor reaching for Join.
+  rows.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  return rows;
+};
+
+/** Where a Join sent you: the name to show, and the address to dial. */
+const lanJoinedGame = (joined) => {
+  if (!joined || typeof joined !== 'object') return null;
+  const name = String(joined.name ?? '').trim();
+  const url = String(joined.url ?? '').trim();
+  if (!name && !url) return null;
+  return { name: name || url, url };
+};
+
 const LAN_CSS = `
 .fe-lan-modes { display: flex; gap: 6px; }
 .fe-lan-mode {
@@ -149,6 +196,43 @@ const LAN_CSS = `
   margin: 0; font-size: 12px; color: rgba(220, 235, 245, .5);
 }
 .fe-lan-note b { color: var(--fe-accent); font-weight: 600; }
+
+.fe-lan-games { display: none; flex-direction: column; gap: 5px; }
+.fe-lan-games[data-visible="true"] { display: flex; }
+.fe-lan-games-title {
+  font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+  color: rgba(220, 235, 245, .5);
+}
+.fe-lan-game-list {
+  margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column;
+  gap: 3px; max-height: 132px; overflow-y: auto;
+}
+.fe-lan-game {
+  display: flex; align-items: center; gap: 10px; font-size: 13px; color: #cfe0ee;
+  padding: 3px 0;
+}
+.fe-lan-game-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.fe-lan-game-players, .fe-lan-game-tag {
+  font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+  color: rgba(220, 235, 245, .5); white-space: nowrap;
+}
+.fe-lan-game-join {
+  padding: 3px 11px; font: inherit; font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; cursor: pointer; color: #061019;
+  background: var(--fe-accent, #7fffc4); border: 0;
+}
+.fe-lan-joined {
+  display: none; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 7px 9px; border: 1px dashed rgba(139, 173, 198, .3);
+}
+.fe-lan-joined[data-visible="true"] { display: flex; }
+.fe-lan-joined-name { font-size: 13px; color: var(--fe-accent, #7fffc4); }
+.fe-lan-back {
+  padding: 4px 10px; font: inherit; font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; cursor: pointer; color: var(--fe-ui, #cfe2f2);
+  background: rgba(10, 20, 28, .55); border: 1px solid rgba(139, 173, 198, .22);
+}
 `;
 
 export class Frontend {
@@ -187,12 +271,16 @@ export class Frontend {
       // room; `roomRequired` means the relay already has a game and wants the
       // code. They are never both meaningful at once.
       mode: 'lan', relayUrl: '', roomCode: null, roomRequired: false, joinError: '',
+      // Discovery. `games` is what the local server's beacons found;
+      // `joinedGame` is set while this client is playing on someone else's.
+      games: [], joinedGame: null,
     };
     this.lanName = sanitizeName(this.readStored(LAN_NAME_KEY));
     this.lan.relayUrl = String(this.readStored(RELAY_URL_KEY) ?? '');
     if (this.lan.relayUrl) this.lan.mode = 'relay';
     this.lanElements = null;
     this.lanRosterKey = null;
+    this.lanGamesKey = null;
     this.lanEditing = false;
 
     this.bindElements();
@@ -483,6 +571,7 @@ export class Frontend {
   setLanState({
     status, peerId, hostId, peers, url, error,
     mode, roomCode, roomRequired, joinError,
+    games, joinedGame,
   } = {}) {
     const lan = this.lan;
     if (status !== undefined) lan.status = LAN_STATUSES.includes(status) ? status : 'offline';
@@ -493,6 +582,8 @@ export class Frontend {
     if (peerId !== undefined) lan.peerId = peerId == null ? null : String(peerId);
     if (hostId !== undefined) lan.hostId = hostId == null ? null : String(hostId);
     if (peers !== undefined) lan.peers = lanPeers(peers);
+    if (games !== undefined) lan.games = lanGameRows(games);
+    if (joinedGame !== undefined) lan.joinedGame = lanJoinedGame(joinedGame);
     if (url !== undefined) lan.url = url == null ? '' : String(url);
     if (error !== undefined) {
       lan.error = error == null ? '' : String(error instanceof Error ? error.message : error);
@@ -509,6 +600,29 @@ export class Frontend {
       const tags = [host ? 'host' : null, self ? 'you' : null].filter(Boolean);
       return { id: peer.id, name: peer.name, host, self, tag: tags.join(' · ') };
     });
+  }
+
+  /**
+   * The games on this WiFi, as drawn.
+   *
+   * The headcount is spelled out here rather than in the renderer so the text
+   * a player reads is testable without a DOM.
+   */
+  get lanGames() {
+    return this.lan.games.map((game) => ({
+      ...game,
+      playersText: `${game.players} player${game.players === 1 ? '' : 's'}`,
+    }));
+  }
+
+  /** Whether the discovered list is the thing to show right now. */
+  get lanGamesVisible() {
+    return this.lan.mode === 'lan' && !this.lan.joinedGame && this.lan.games.length > 0;
+  }
+
+  /** The banner shown while playing on somebody else's server. */
+  get joinedGameText() {
+    return this.lan.joinedGame ? `Playing on ${this.lan.joinedGame.name}` : '';
   }
 
   get lanStatusText() {
@@ -567,6 +681,8 @@ export class Frontend {
       roomCode: this.lan.roomCode,
       roomRequired: this.lan.roomRequired,
       joinError: this.lan.joinError,
+      games: this.lan.games,
+      joinedGame: this.lan.joinedGame,
     };
   }
 
@@ -680,6 +796,24 @@ export class Frontend {
     make('h2', 'fe-lan-title', head, 'Multiplayer');
     const status = make('span', 'fe-lan-status', head, '');
 
+    // Under the status line: the games this app's beacons found. Rows are
+    // built in renderLan, because they come and go with the beacons.
+    const gamesBox = make('div', 'fe-lan-games', panel);
+    gamesBox.dataset.visible = 'false';
+    make('span', 'fe-lan-games-title', gamesBox, 'Games on this WiFi');
+    const games = make('ul', 'fe-lan-game-list', gamesBox);
+
+    // Shown instead, while playing on somebody else's server.
+    const joined = make('div', 'fe-lan-joined', panel);
+    joined.dataset.visible = 'false';
+    const joinedName = make('span', 'fe-lan-joined-name', joined, '');
+    const back = make('button', 'fe-lan-back', joined, 'Back to my game');
+    back.type = 'button';
+    back.dataset.action = 'leave-game';
+    back.addEventListener('click', (event) => {
+      event.stopPropagation?.();
+      this.action('leave-game');
+    });
 
     const field = make('div', 'fe-lan-field', panel);
     const label = make('label', null, field, 'Name');
@@ -765,6 +899,7 @@ export class Frontend {
     this.lanElements = {
       panel, status, name, roster, note, make,
       modeButtons, relay, relayInput, codeBox, codeValue, joinBox, joinInput, joinError,
+      gamesBox, games, joined, joinedName, back,
     };
     return panel;
   }
@@ -799,6 +934,8 @@ export class Frontend {
     // lands on blur instead, where it cannot move the caret under them.
     if (!this.lanEditing && lan.name.value !== this.lanName) lan.name.value = this.lanName;
 
+    this.renderLanGames();
+
     const roster = this.lanRoster;
     // render() runs on every progress event, so the list is only rebuilt when
     // it would actually differ.
@@ -817,6 +954,55 @@ export class Frontend {
     });
     if (!rows.length) rows.push(lan.make('li', 'fe-lan-empty', null, 'Nobody else on the LAN yet'));
     lan.roster.replaceChildren(...rows);
+  }
+
+  /**
+   * The games-on-this-WiFi list and the joined banner.
+   *
+   * An incompatible game keeps its row and loses its button: hiding it would
+   * leave someone staring at a lobby that cannot see the friend sitting next
+   * to them, and offering Join would let two builds that cannot talk try.
+   */
+  renderLanGames() {
+    const lan = this.lanElements;
+    if (!lan?.gamesBox) return;
+
+    const joined = this.lan.joinedGame;
+    lan.joined.dataset.visible = String(Boolean(joined));
+    lan.joinedName.textContent = this.joinedGameText;
+    lan.gamesBox.dataset.visible = String(this.lanGamesVisible);
+
+    const games = this.lanGames;
+    // render() runs on every progress event, so the rows -- which carry click
+    // handlers -- are only rebuilt when the list would actually differ.
+    const key = games
+      .map((game) => `${game.id} ${game.name} ${game.players} ${game.compatible}`)
+      .join('|');
+    if (key === this.lanGamesKey) return;
+    this.lanGamesKey = key;
+
+    lan.games.replaceChildren(...games.map((game) => {
+      const row = lan.make('li', 'fe-lan-game');
+      row.dataset.gameId = game.id;
+      row.dataset.compatible = String(game.compatible);
+      lan.make('span', 'fe-lan-game-name', row, game.name);
+      lan.make('span', 'fe-lan-game-players', row, game.playersText);
+      if (!game.compatible) {
+        lan.make('span', 'fe-lan-game-tag', row, 'different version');
+        return row;
+      }
+      const join = lan.make('button', 'fe-lan-game-join', row, 'Join');
+      join.type = 'button';
+      join.dataset.action = 'join-game';
+      join.addEventListener('click', (event) => {
+        // The shell starts the game on any click, so a reach for Join must
+        // not also deploy the player into the match they are leaving.
+        event.stopPropagation?.();
+        this.action('join-game',
+          { address: game.address, port: game.port, name: game.name });
+      });
+      return row;
+    }));
   }
 
   /** Shell buttons, including class navigation and card confirmation. */
