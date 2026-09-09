@@ -15,32 +15,47 @@ Everyone involved is on a Mac.
 
 ## What we ship
 
-One zip, `PlayOps-mac.zip`, shared by AirDrop, a link, or a GitHub Release.
-It unzips to a folder:
+One disk image, `PlayOps.dmg`, shared by AirDrop, a link, or a GitHub
+Release. Opening it shows one thing to drag anywhere, or run in place:
 
 ```
-PlayOps-mac/
-  PlayOps          universal Mach-O binary (arm64 + x86_64), the LAN server
-  web/             the game (a copy of export/web, vendored deps included)
-  README.txt       three steps, plus the Gatekeeper and firewall notes
+PlayOps.app/
+  Contents/
+    Info.plist               CFBundleExecutable=PlayOps, CFBundleIconFile=PlayOps
+    MacOS/
+      PlayOps                launcher shell script (see below)
+      playops-server         universal Mach-O binary (arm64 + x86_64), the LAN server
+    Resources/
+      PlayOps.icns           icon made from ui/menu_mp_map_select_hijacked_final.png
+      web/                   the game (a copy of export/web, vendored deps included)
+      README.txt             three steps, plus the Gatekeeper and firewall notes
 ```
 
-Only the host needs the zip. Friends open a URL in their browser.
+The dmg also carries a `README.txt` beside the app so the notes are visible
+before anyone launches anything.
 
-### Double-clicking `PlayOps`
+Only the host needs the dmg. Friends open a URL in their browser.
 
-macOS opens a Terminal window for a bare executable. In it the binary:
+### Double-clicking `PlayOps.app`
 
-1. Finds `web/` next to `process.execPath`. If it is missing, prints a clear
-   line saying the folder was moved apart and exits non-zero.
+An app bundle launched from Finder has no Terminal, so the launcher script
+`Contents/MacOS/PlayOps` does exactly one thing: `open -a Terminal` on the
+sibling `playops-server` binary. That gives the host a Terminal window showing
+the banner, and closing that window is how they stop hosting. (`osascript`
+driving Terminal is avoided on purpose: it triggers an Automation permission
+prompt; `open -a Terminal <executable>` does not.)
+
+In that Terminal the binary:
+
+1. Finds `web/` at `../Resources/web` relative to `process.execPath`. If it is
+   missing, prints a clear line and exits non-zero.
 2. Starts the existing LAN server (`createLanServer`) on port 8000, serving
    `web/`. If 8000 is taken it tries the next few ports and says which one it
    took.
 3. Prints the banner: the local URL, every LAN join URL, and a QR code of the
    first LAN join URL, large enough to scan across a table.
 4. Opens the host's default browser at `http://localhost:<port>` via `open`.
-5. Runs until the Terminal window is closed or Ctrl+C. Closing the window is
-   the quit story; no menubar app, no window of our own.
+5. Runs until the Terminal window is closed or Ctrl+C.
 
 The QR code is the point of the whole thing. Typing `192.168.10.183:8000` is
 the friction that stops people; scanning is not.
@@ -62,11 +77,17 @@ the friction that stops people; scanning is not.
    `codesign --remove-signature`.
 5. `lipo -create` the two into one universal `PlayOps`, then ad-hoc sign it
    (`codesign -s -`). Verify with `lipo -info` and `codesign -v`.
-6. Copy `export/web/` to `dist/PlayOps-mac/web/`. Exclude nothing the game
-   needs; exclude nothing else either unless it is obviously dev-only and the
-   saving is real.
-7. Write `README.txt`. Zip with `ditto -c -k --keepParent` so executable bits
-   survive, into `dist/PlayOps-mac.zip`. Print the final size.
+6. Assemble `dist/PlayOps.app` as laid out above. Copy `export/web/` to
+   `Contents/Resources/web/`. Exclude nothing the game needs; exclude nothing
+   else either unless it is obviously dev-only and the saving is real.
+7. Make `PlayOps.icns` from `export/web/ui/menu_mp_map_select_hijacked_final.png`
+   with `sips` (each iconset size) and `iconutil -c icns`. Write `Info.plist`
+   (bundle id `in.ratrey.playops`, version from `package.json`). Ad-hoc sign
+   the whole bundle (`codesign -s - --deep`).
+8. Write `README.txt` into `Contents/Resources/` and beside the app in the dmg
+   staging folder. Build the image with
+   `hdiutil create -volname PlayOps -srcfolder <staging> -ov -format UDZO
+   dist/PlayOps.dmg`. Print the final size.
 
 New dev dependencies: `esbuild`, `postject`, `qrcode-terminal` (pure JS, is
 bundled into the binary). No new runtime dependency for the web export.
@@ -78,7 +99,7 @@ allowlist; `.tools/package_mac.mjs`, `server/host-entry.mjs`,
 ### Release workflow
 
 `.github/workflows/package-mac.yml` runs on a `v*` tag on `macos-14`: checkout,
-`npm ci`, `npm run package:mac`, attach `dist/PlayOps-mac.zip` to the GitHub
+`npm ci`, `npm run package:mac`, attach `dist/PlayOps.dmg` to the GitHub
 Release for that tag. One runner is enough because both architectures are
 built from downloaded tarballs, not from the runner's own Node.
 
@@ -90,22 +111,26 @@ built from downloaded tarballs, not from the runner's own Node.
   separate decision.
 - **Firewall.** macOS asks whether to allow incoming connections the first
   time. Friends cannot connect until the host clicks Allow.
-- **Size.** Roughly 120–150 MB zipped: two copies of the Node runtime (~110 MB
-  each uncompressed) plus 179 MB of game assets. Fine for AirDrop or a
+- **Size.** Roughly 120–150 MB compressed: two copies of the Node runtime
+  (~110 MB each uncompressed) plus 179 MB of game assets. Fine for AirDrop or a
   Release; too big to email.
 
 ## Testing
 
 - `test/host-entry.test.mjs`: unit tests for the pure pieces — locating
-  `web/` beside the executable, the port fallback sequence, banner text
+  `web/` from the executable path (bundle layout, and a plain
+  `web/`-beside-binary fallback for local runs), the port fallback sequence, banner text
   containing every LAN address, and the QR input being the first LAN URL.
   Import directly from the source, `node:assert/strict`, `node --test`, as the
   repo does everywhere else.
 - `test/package-mac.test.mjs`: builds into a temp `dist`, then asserts
-  `lipo -info` reports both `x86_64` and `arm64`, `codesign -v` passes, the
-  zip contains `PlayOps-mac/PlayOps` and `PlayOps-mac/web/index.html`, and
-  launching the unzipped binary from a *different* working directory answers
-  `/net/health` with `lan: true` and `/index.html` with 200. Skipped when not
+  `lipo -info` on `playops-server` reports both `x86_64` and `arm64`,
+  `codesign -v` passes on the bundle, `hdiutil attach` of the dmg exposes
+  `PlayOps.app/Contents/MacOS/playops-server` and
+  `PlayOps.app/Contents/Resources/web/index.html` (detach afterwards), and
+  launching the binary from the mounted image, from a *different* working
+  directory, answers `/net/health` with `lan: true` and `/index.html` with
+  200. Skipped when not
   on darwin or when network access to nodejs.org is unavailable, with the
   reason printed.
 - Evidence for the report: the final `ls -la dist/`, the `lipo -info` line,
