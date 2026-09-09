@@ -19,8 +19,12 @@ import path from 'node:path';
 import process from 'node:process';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
+import { randomBytes } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import protocol from '../export/web/net/protocol.js';
+import {
+  BEACON_INTERVAL_MS, DISCOVERY_PORT, DiscoveryTable, prettyHostName, startDiscovery,
+} from './lan-discovery.mjs';
 import { LanRoster } from './lan-roster.mjs';
 
 // `import.meta.url` is meaningless once this file is bundled into a single
@@ -39,6 +43,46 @@ const here = moduleDir();
 const DEFAULT_ROOT = here === null
   ? path.resolve('export', 'web')
   : path.resolve(here, '..', 'export', 'web');
+
+/**
+ * The build number people read, as opposed to the protocol version machines
+ * agree on. Only the latter decides whether two games may talk.
+ */
+export const APP_VERSION = (() => {
+  // No module directory means this is the packaged binary, where package.json
+  // is not on disk at all -- so there is nothing to read and nothing to warn
+  // about. The packaged build bakes its version in through the environment.
+  if (here === null) return String(process.env.PLAYOPS_APP_VERSION || '0.0.0');
+  try {
+    const manifest = fs.readFileSync(path.resolve(here, '..', 'package.json'), 'utf8');
+    return String(JSON.parse(manifest).version ?? '0.0.0');
+  } catch {
+    // A stripped install still serves the game; it just has nothing to show.
+    return '0.0.0';
+  }
+})();
+
+/**
+ * `/net/health` and `/net/discover` are cross-origin by design.
+ *
+ * After a Join, the page is still the one served from your own Mac and it
+ * probes a friend's. Nothing here is private -- a peer count and a port,
+ * already broadcast to the whole WiFi -- and the relay does the same.
+ */
+const JSON_HEADERS = Object.freeze({
+  'Content-Type': 'application/json; charset=utf-8',
+  'Cache-Control': 'no-store',
+  'Access-Control-Allow-Origin': '*',
+});
+
+/**
+ * A roster name the player never chose.
+ *
+ * `LanRoster` names an unnamed peer `PLAYER 3` so a lobby reads as distinct
+ * people. That is a placeholder, not a callsign, so the beacon falls back to
+ * the Mac's name instead of announcing a game called PLAYER 1.
+ */
+const PLACEHOLDER_NAME = /^PLAYER \d+$/;
 
 // Extends the map in .tools/ai-game.mjs. The design calls for that map to be
 // extracted into a shared module; doing so means editing the harness, so the
@@ -195,6 +239,15 @@ export async function createLanServer({
   log = (line) => process.stdout.write(`${line}\n`),
   hostSilenceMs = 6000,
   hostWatchIntervalMs = 1000,
+  // Discovery is on unless the environment says otherwise. `PLAYOPS_DISCOVERY=0`
+  // is the escape hatch for a machine where the UDP prompt was denied or a
+  // port is contested; the typed address and the QR still work without it.
+  discovery = process.env.PLAYOPS_DISCOVERY !== '0',
+  discoveryPort = Number(process.env.PLAYOPS_DISCOVERY_PORT ?? DISCOVERY_PORT),
+  // Set to unicast beacons at one address instead of broadcasting. The
+  // loopback harness uses this; nothing in normal play does.
+  discoveryAddress = process.env.PLAYOPS_DISCOVERY_ADDR ?? null,
+  discoveryInterval = BEACON_INTERVAL_MS,
 } = {}) {
   const startedAt = performance.now();
   // Clients derive their clock offset from this, so it must be monotonic and
@@ -238,13 +291,59 @@ export async function createLanServer({
     broadcast(protocol.MSG.HOST_CHANGED, { hostId: promoted });
   };
 
+  // Discovery.
+  //
+  // The id is per process, not per machine: two servers on one Mac are two
+  // games, and each has to be able to recognise -- and ignore -- its own
+  // beacon among the ones it receives on the shared port.
+  const discoveryId = randomBytes(4).toString('hex');
+  const discoveryTable = new DiscoveryTable({
+    selfId: discoveryId,
+    protocolVersion: protocol.PROTOCOL_VERSION,
+  });
+
+  /**
+   * The beacon fields, or null for "do not announce".
+   *
+   * Null while the roster is empty. One player connected to your own server is
+   * enough, which is the case the moment you open the game; when you join
+   * someone else your own roster empties and this falls silent, so nobody is
+   * offered a game with nobody in it.
+   */
+  const announce = () => {
+    if (roster.size === 0) return null;
+    const host = roster.get(roster.hostId);
+    const callsign = host?.name && !PLACEHOLDER_NAME.test(host.name) ? host.name : '';
+    return {
+      v: protocol.PROTOCOL_VERSION,
+      id: discoveryId,
+      name: callsign || prettyHostName(os.hostname()),
+      port: server.address()?.port ?? port,
+      players: roster.size,
+      version: APP_VERSION,
+    };
+  };
+
+  let discoveryHandle = null;
+
   const server = http.createServer((request, response) => {
     try {
+      const requestUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
+
+      // Who else is on this WiFi. The list is the table's, so a server with
+      // discovery turned off answers with an honest empty list rather than a
+      // 404 the client would have to special-case.
+      if (requestUrl.pathname === '/net/discover') {
+        response.writeHead(200, JSON_HEADERS);
+        response.end(JSON.stringify({ games: discoveryTable.games() }));
+        return;
+      }
+
       // A cheap "is there a LAN server here?" probe. The game asks before it
       // opens a socket, because a plain static server (python -m http.server,
       // or the test harness) would answer a WebSocket upgrade with a 404 and
       // the client would log a console error every retry, forever.
-      if (request.url === '/net/health') {
+      if (requestUrl.pathname === '/net/health') {
         // The join URL has to come from the server. A player on the host
         // machine sees location.origin as localhost, which is exactly the one
         // address nobody else can use, so the panel would tell them to read
@@ -266,10 +365,7 @@ export async function createLanServer({
               ? [`http://${bonjourHostname()}:${listenPort}`] : []),
           ],
         });
-        response.writeHead(200, {
-          'Content-Type': 'application/json; charset=utf-8',
-          'Cache-Control': 'no-store',
-        });
+        response.writeHead(200, JSON_HEADERS);
         response.end(body);
         return;
       }
@@ -458,6 +554,17 @@ export async function createLanServer({
   watchdog = setInterval(checkHostLiveness, hostWatchIntervalMs);
   watchdog.unref?.();
 
+  if (discovery) {
+    discoveryHandle = startDiscovery({
+      port: discoveryPort,
+      interval: discoveryInterval,
+      address: discoveryAddress,
+      table: discoveryTable,
+      announce,
+      log,
+    });
+  }
+
   const address = server.address();
   const boundPort = typeof address === 'object' && address ? address.port : port;
   // 0.0.0.0 is a bind address, not something you can type into a browser.
@@ -474,7 +581,12 @@ export async function createLanServer({
     wsUrl: `ws://${reachable}:${boundPort}/net`,
     serverTime,
     checkHostLiveness,
+    discovery: discoveryHandle,
+    discoveryTable,
+    discoveryId,
+    announce,
     async close() {
+      discoveryHandle?.close();
       clearInterval(watchdog);
       for (const socket of wss.clients) socket.terminate();
       await new Promise((resolve) => wss.close(resolve));
@@ -484,11 +596,14 @@ export async function createLanServer({
   };
 }
 
-function banner(port) {
+function banner(port, discovery = null) {
   const lines = [
     'Claude of Duty — LAN server',
     `  Local    http://localhost:${port}`,
   ];
+  if (discovery) {
+    lines.push(`  Discover UDP ${discovery.port}   <- games on this WiFi find each other here`);
+  }
   const addresses = lanAddresses();
   for (const address of addresses) {
     lines.push(`  LAN      http://${address}:${port}   <- share this on the WiFi`);
@@ -516,7 +631,7 @@ function invokedDirectly() {
 async function runCli() {
   const port = Number(process.env.PORT ?? process.argv[2] ?? 8000);
   const lan = await createLanServer({ port });
-  process.stdout.write(`${banner(lan.port)}\n\n`);
+  process.stdout.write(`${banner(lan.port, lan.discovery)}\n\n`);
   const shutdown = () => {
     lan.close().finally(() => process.exit(0));
   };
