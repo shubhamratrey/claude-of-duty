@@ -23,8 +23,22 @@ import { WebSocketServer } from 'ws';
 import protocol from '../export/web/net/protocol.js';
 import { LanRoster } from './lan-roster.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_ROOT = path.resolve(here, '..', 'export', 'web');
+// `import.meta.url` is meaningless once this file is bundled into a single
+// executable: the script is a resource inside the binary, not a file on disk.
+// Both uses of it are therefore guarded, so the module still loads there and
+// the packaged host can supply its own `root` from `process.execPath`.
+function moduleDir() {
+  try {
+    return path.dirname(fileURLToPath(import.meta.url));
+  } catch {
+    return null;
+  }
+}
+
+const here = moduleDir();
+const DEFAULT_ROOT = here === null
+  ? path.resolve('export', 'web')
+  : path.resolve(here, '..', 'export', 'web');
 
 // Extends the map in .tools/ai-game.mjs. The design calls for that map to be
 // extracted into a shared module; doing so means editing the harness, so the
@@ -79,6 +93,21 @@ export function resolveStaticPath(root, urlPath) {
   const filename = path.resolve(root, `.${relative}`);
   if (filename !== root && !filename.startsWith(`${root}${path.sep}`)) return null;
   return filename;
+}
+
+/**
+ * `<hostname>.local`, the Bonjour name macOS already publishes for this Mac.
+ *
+ * Friendlier to read out than four numbers and a colon, and every Mac, iPhone
+ * and iPad on the WiFi resolves it with no setup. Returns null when there is no
+ * name to publish, so callers can fall back to the numeric address rather than
+ * printing `http://.local:8000`.
+ */
+export function bonjourHostname(hostname = os.hostname()) {
+  const trimmed = String(hostname ?? '').trim().replace(/\.+$/, '');
+  const base = trimmed.replace(/\.local$/i, '');
+  if (base.length === 0) return null;
+  return `${base.toLowerCase()}.local`;
 }
 
 /** Non-internal IPv4 addresses, which are the ones worth reading aloud. */
@@ -228,7 +257,14 @@ export async function createLanServer({
           hostId: roster.hostId,
           serverTime: serverTime(),
           joinUrl: addresses.length ? `http://${addresses[0]}:${listenPort}` : null,
-          joinUrls: addresses.map((address) => `http://${address}:${listenPort}`),
+          // The .local name goes last: it is the nicest one to read out, but
+          // it is also the one most likely to be missing or wrong, so a
+          // consumer taking the first entry still gets a numeric address.
+          joinUrls: [
+            ...addresses.map((address) => `http://${address}:${listenPort}`),
+            ...(addresses.length > 0 && bonjourHostname()
+              ? [`http://${bonjourHostname()}:${listenPort}`] : []),
+          ],
         });
         response.writeHead(200, {
           'Content-Type': 'application/json; charset=utf-8',
@@ -245,6 +281,18 @@ export async function createLanServer({
   });
 
   const wss = new WebSocketServer({ server, path: '/net' });
+
+  // ws re-emits the HTTP server's errors on itself, so a failed listen -- a
+  // busy port, nearly always -- arrives here as well as at the listen promise
+  // below. With no listener that becomes an unhandled 'error' event and takes
+  // the process down with a stack trace where a sentence would do. Before the
+  // server is up the listen promise owns the report; after it, this is the only
+  // place a socket-layer failure would be seen at all.
+  let listening = false;
+  wss.on('error', (error) => {
+    if (!listening) return;
+    log(`[lan] ! socket server error: ${error?.message ?? error}`);
+  });
 
   // Backpressure.
   //
@@ -406,6 +454,7 @@ export async function createLanServer({
     });
   });
 
+  listening = true;
   watchdog = setInterval(checkHostLiveness, hostWatchIntervalMs);
   watchdog.unref?.();
 
@@ -451,7 +500,20 @@ function banner(port) {
 }
 
 // Direct execution: `node server/lan-server.mjs [port]`.
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+//
+// The work is in an async function rather than at the top level because a
+// top-level await cannot be expressed in the CommonJS bundle the single
+// executable needs, and this module is part of that bundle.
+function invokedDirectly() {
+  try {
+    return Boolean(process.argv[1]) &&
+      fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+  } catch {
+    return false;
+  }
+}
+
+async function runCli() {
   const port = Number(process.env.PORT ?? process.argv[2] ?? 8000);
   const lan = await createLanServer({ port });
   process.stdout.write(`${banner(lan.port)}\n\n`);
@@ -460,6 +522,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+}
+
+if (invokedDirectly()) {
+  runCli().catch((error) => {
+    process.stderr.write(`[lan] ${error?.stack ?? error}\n`);
+    process.exit(1);
+  });
 }
 
 export default createLanServer;

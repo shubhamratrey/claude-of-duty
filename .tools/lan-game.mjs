@@ -37,6 +37,25 @@ function findBrowser() {
 
 const state = (page) => page.evaluate(() => globalThis.hijacked.debug.getState());
 
+/**
+ * Stand in for a server this process did not start.
+ *
+ * Set `LAN_TARGET_URL` to run the whole two-browser check against a server
+ * that is already listening -- the packaged PlayOps binary, most usefully. The
+ * checks below only ever ask the server for a URL and, at the end, to shut
+ * down; a server we do not own is simply left running. Unset, nothing changes:
+ * the harness boots its own server on an ephemeral port as it always has.
+ */
+function attachToRunningServer(url) {
+  const base = url.replace(/\/$/, '');
+  return {
+    url: base,
+    wsUrl: `${base.replace(/^http/, 'ws')}/net`,
+    external: true,
+    async close() {},
+  };
+}
+
 async function waitReady(page, label) {
   await page.waitForFunction(
     () => globalThis.hijacked?.debug?.getState?.().ready === true,
@@ -87,8 +106,10 @@ export async function runLanTest() {
   if (!browserPath) throw new Error('Chrome or Edge was not found. Set BROWSER_PATH to its executable.');
   await fs.promises.mkdir(artifactRoot, { recursive: true });
 
-  const lan = await createLanServer({ port: 0, host: '127.0.0.1', log: () => {} });
-  process.stdout.write(`LAN server on ${lan.url}\n`);
+  const lan = process.env.LAN_TARGET_URL
+    ? attachToRunningServer(process.env.LAN_TARGET_URL)
+    : await createLanServer({ port: 0, host: '127.0.0.1', log: () => {} });
+  process.stdout.write(`LAN server on ${lan.url}${lan.external ? ' (already running)' : ''}\n`);
 
   const browser = await chromium.launch({
     executablePath: browserPath,

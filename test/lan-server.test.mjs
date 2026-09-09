@@ -4,7 +4,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import protocol from '../export/web/net/protocol.js';
-import { createLanServer, resolveStaticPath } from '../server/lan-server.mjs';
+import { bonjourHostname, createLanServer, lanAddresses, resolveStaticPath } from '../server/lan-server.mjs';
 
 const WEB_ROOT = fileURLToPath(new URL('../export/web', import.meta.url));
 const TIMEOUT_MS = 5000;
@@ -346,4 +346,28 @@ test('static files are served with usable types and traversal is refused', async
   assert.equal(resolveStaticPath(WEB_ROOT, '/../package.json'), null);
   assert.equal(resolveStaticPath(WEB_ROOT, '/'), path.join(WEB_ROOT, 'index.html'));
   assert.equal(resolveStaticPath(WEB_ROOT, '/frontend.js'), path.join(WEB_ROOT, 'frontend.js'));
+});
+
+test('/net/health advertises every numeric join URL and the .local name', async (t) => {
+  const lan = await boot(t);
+  const health = await rawGet(lan.port, '/net/health');
+  assert.equal(health.status, 200);
+  assert.match(health.type, /application\/json/);
+  const info = JSON.parse(health.body);
+  assert.equal(info.lan, true);
+
+  const addresses = lanAddresses();
+  for (const address of addresses) {
+    assert.ok(info.joinUrls.includes(`http://${address}:${lan.port}`),
+      `${address} missing from ${JSON.stringify(info.joinUrls)}`);
+  }
+  // joinUrl is what the game reads out, so it stays a numeric address that
+  // needs no name resolution to work.
+  if (addresses.length > 0) {
+    assert.equal(info.joinUrl, `http://${addresses[0]}:${lan.port}`);
+    assert.equal(info.joinUrls.at(-1), `http://${bonjourHostname()}:${lan.port}`);
+  } else {
+    assert.equal(info.joinUrl, null);
+    assert.deepEqual(info.joinUrls, []);
+  }
 });
