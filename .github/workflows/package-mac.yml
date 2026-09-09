@@ -1,0 +1,63 @@
+# Builds PlayOps.dmg on a v* tag and attaches it to that tag's Release.
+#
+# One runner is enough even though the binary is universal: both architectures
+# come from official Node tarballs downloaded during the build, not from the
+# runner's own Node, so an arm64 or an x86_64 runner produces the same image.
+name: Package Mac host
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: package-mac-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  dmg:
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The tarballs are keyed by the exact Node version the build runs on, so
+      # a cache hit is only ever the right runtime, never a near-miss.
+      - name: Cache Node runtimes
+        uses: actions/cache@v4
+        with:
+          path: .cache/node
+          key: node-runtimes-${{ runner.os }}-${{ hashFiles('package.json') }}
+          restore-keys: node-runtimes-${{ runner.os }}-
+
+      - name: Build PlayOps.dmg
+        run: npm run package:mac
+
+      - name: Report the image
+        run: ls -lh dist/PlayOps.dmg && lipo -info dist/PlayOps.app/Contents/MacOS/playops-server
+
+      - name: Upload the image as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PlayOps-dmg
+          path: dist/PlayOps.dmg
+          if-no-files-found: error
+
+      - name: Attach the image to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" dist/PlayOps.dmg --clobber
