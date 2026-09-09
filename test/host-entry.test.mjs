@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
+import { DISCOVERY_PORT } from '../server/lan-discovery.mjs';
 import {
   DEFAULT_PORT,
   bonjourHostname,
@@ -195,7 +196,9 @@ test('a busy port is stepped over rather than reported to the host', async (t) =
   t.after(() => new Promise((resolve) => blocker.close(resolve)));
 
   const lan = await listenOnFirstFreePort([busy, busy + 1, busy + 2], {
-    host: '127.0.0.1', log: () => {},
+    // A unit test has no business binding the shared discovery port; the
+    // packaged host turns it on, and test/lan-discovery.test.mjs proves it.
+    host: '127.0.0.1', log: () => {}, discovery: false,
   });
   t.after(() => lan.close());
   assert.notEqual(lan.port, busy);
@@ -208,10 +211,52 @@ test('every port being taken is reported, not retried forever', async () => {
   const busy = blocker.address().port;
   try {
     await assert.rejects(
-      listenOnFirstFreePort([busy], { host: '127.0.0.1', log: () => {} }),
+      listenOnFirstFreePort([busy], { host: '127.0.0.1', log: () => {}, discovery: false }),
       /in use/,
     );
   } finally {
     await new Promise((resolve) => blocker.close(resolve));
   }
+});
+
+// Discovery is what makes the packaged app worth double-clicking twice: the
+// second Mac on the WiFi lists the first one's game without anybody reading an
+// address out. The banner has to say it is running, both so the host knows and
+// so the macOS local-network prompt that follows makes sense.
+
+test('the banner names the discovery port when the beacon is running', () => {
+  const text = hostBanner({
+    port: 8000,
+    addresses: ['192.168.10.183'],
+    discovery: { port: DISCOVERY_PORT },
+  });
+  assert.match(text, /Discover UDP 8010/);
+  assert.match(text, /this WiFi/i);
+  // The address to read out still comes first: discovery is the shortcut, not
+  // the only way in.
+  assert.ok(text.indexOf('192.168.10.183') < text.indexOf('Discover'),
+    'the shareable address must stay above the discovery note');
+});
+
+test('the banner stays silent about discovery when it is switched off', () => {
+  const text = hostBanner({ port: 8000, addresses: ['192.168.10.183'], discovery: null });
+  assert.doesNotMatch(text, /Discover|UDP/i);
+});
+
+test('a host started with no options announces itself on the WiFi', async (t) => {
+  // The packaged app passes no flags at all, so the default has to be "on".
+  // Unicast to loopback on a port of this repo's own choosing, so the check
+  // costs the WiFi nothing.
+  const lan = await listenOnFirstFreePort([0], {
+    host: '127.0.0.1',
+    log: () => {},
+    discoveryPort: 18098,
+    discoveryAddress: '127.0.0.1',
+    discoveryInterval: 60000,
+  });
+  t.after(() => lan.close());
+  assert.ok(lan.discovery, 'discovery is on with no options set');
+  assert.equal(lan.discovery.port, 18098);
+  assert.match(hostBanner({ port: lan.port, addresses: [], discovery: lan.discovery }),
+    /Discover UDP 18098/);
 });

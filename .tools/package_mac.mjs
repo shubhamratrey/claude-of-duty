@@ -246,8 +246,12 @@ Three steps
 
 Closing that Terminal window stops hosting.
 
-Two things macOS will ask you first
------------------------------------
+If a friend is also running PlayOps, neither of you needs to type anything:
+each app announces its game on the WiFi and the other lists it under
+"Games on this WiFi", with a Join button.
+
+Three things macOS will ask you first
+-------------------------------------
 "PlayOps cannot be opened because it is from an unidentified developer."
     This app is signed, but not notarized by Apple — notarizing needs a paid
     Apple Developer account. Open System Settings > Privacy & Security, scroll
@@ -258,6 +262,13 @@ Two things macOS will ask you first
 connections?"
     Click Allow. Your friends cannot reach the game until you do — that prompt
     is macOS asking whether this Mac may act as a server on your network.
+
+"PlayOps would like to find and connect to devices on your local network."
+    Click Allow. This one arrives a second or two after the window opens, the
+    first time the app looks for other games, and it is shown against Terminal
+    rather than PlayOps — because Terminal is what launched the server. You
+    only do this once. If you click Deny, "Games on this WiFi" simply stays
+    empty; the QR code and the typed LAN address still work exactly as before.
 
 If nobody can connect
 ---------------------
@@ -325,10 +336,13 @@ export async function packageMac({ distDir = path.join(ROOT, 'dist'), vendor = t
     platform: 'node',
     target: 'node22',
     format: 'cjs',
-    // Nothing external. `ws`, `qrcode-terminal` and the game's own
-    // net/protocol.js all go in, because the binary has to run on a Mac with no
-    // node_modules anywhere near it.
+    // Nothing external. `ws`, `qrcode-terminal`, the discovery beacon and the
+    // game's own net/protocol.js all go in, because the binary has to run on a
+    // Mac with no node_modules anywhere near it.
     packages: 'bundle',
+    // package.json is not on disk inside a SEA, so the version the discovery
+    // beacon reports would be 0.0.0 unless it is baked in here.
+    define: { 'globalThis.PLAYOPS_APP_VERSION': JSON.stringify(appVersion) },
     outfile: mainScript,
     logLevel: 'warning',
   });

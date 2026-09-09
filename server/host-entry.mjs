@@ -11,7 +11,8 @@
 //   * The host double-clicks an icon. There is no terminal to read an error
 //     out of unless we put one there, and no chance to pass a flag. So the
 //     defaults have to be right: port 8000 with a fallback, a banner with a QR
-//     code, and the browser opened automatically.
+//     code, LAN discovery announcing the game, and the browser opened
+//     automatically.
 //
 // Everything that can be decided without touching the network or the disk is
 // an exported pure function, because that is the part worth unit testing; the
@@ -110,7 +111,9 @@ export function renderQr(text) {
  * and a dock is on two networks, and only the host can tell which one their
  * friends are on.
  */
-export function hostBanner({ port, addresses = [], hostname = os.hostname() }) {
+export function hostBanner({
+  port, addresses = [], hostname = os.hostname(), discovery = null,
+}) {
   const lines = [
     'PlayOps — Claude of Duty LAN host',
     '',
@@ -128,6 +131,13 @@ export function hostBanner({ port, addresses = [], hostname = os.hostname() }) {
   }
   if (addresses.length === 0) {
     lines.push('  LAN      (no non-internal IPv4 address — check the WiFi is on)');
+  }
+  // Worth a line of its own because it is the one thing on this screen the
+  // host does not have to read out: with discovery running, a friend's app
+  // lists this game by itself. Naming the port also makes the macOS
+  // local-network prompt, which arrives seconds later, make sense.
+  if (discovery) {
+    lines.push(`  Discover UDP ${discovery.port}   <- games on this WiFi find each other here`);
   }
   lines.push('');
   lines.push('  Stop     close this window or press Ctrl+C');
@@ -213,7 +223,9 @@ export async function startHost({
   });
 
   const addresses = lanAddresses();
-  write(`\n${hostBanner({ port: lan.port, addresses })}\n\n`);
+  // `lan.discovery` is null only when PLAYOPS_DISCOVERY=0 turned the beacon
+  // off; the packaged host otherwise announces itself with no flags at all.
+  write(`\n${hostBanner({ port: lan.port, addresses, discovery: lan.discovery })}\n\n`);
   const target = qrTarget({ port: lan.port, addresses });
   if (target) {
     write(`${renderQr(target)}\n`);

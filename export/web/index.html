@@ -1303,6 +1303,11 @@ let netSession = null;
 let remoteBots = null;
 let lanJoinUrl = null;
 let pendingNetworkSpawn = null;
+// Set while playing on a friend's server, from a Join in the lobby's
+// "Games on this WiFi" list: `{ address, port, name }`. The page is still the
+// one served from this Mac; only the socket points elsewhere.
+let joinedGame = null;
+let discoveryTimer = null;
 
 // The local player's key in the scoreboard. Offline it stays 'player'. On a
 // LAN the host writes one scoreboard for the whole room, so every combatant
@@ -1718,6 +1723,28 @@ function menuAction(name, value) {
     netSession?.client?.joinRoom?.(value);
     return;
   }
+  // A game picked out of the discovered list. The address is the one the
+  // beacon was seen coming from, never one a payload named.
+  if (name === 'join-game') {
+    const address = String(value?.address ?? '').trim();
+    const port = Number(value?.port);
+    if (!address || !Number.isInteger(port)) return;
+    joinedGame = { address, port, name: String(value?.name || address) };
+    frontend.setLanState?.({
+      mode: 'lan',
+      joinedGame: { name: joinedGame.name, url: `http://${address}:${port}` },
+    });
+    restartLanSession();
+    return;
+  }
+  if (name === 'leave-game') {
+    if (!joinedGame) return;
+    joinedGame = null;
+    lanJoinUrl = null;
+    frontend.setLanState?.({ joinedGame: null, games: [] });
+    restartLanSession();
+    return;
+  }
   if (name === 'respawn') {
     if (playerHealth) playerHealth.respawn();
     else player?.respawn();
@@ -2033,6 +2060,9 @@ function getDebugState() {
       scene: mapOptimization,
     },
     menu: frontend.getState(),
+    // The lobby as drawn, including the discovered games and which one this
+    // client joined. Compact and serialisable, for the discovery harness.
+    lan: frontend.getLanState?.() ?? null,
     nameplates: nameplates.getState(),
     net: netSession?.getState?.() ?? null,
     match: match.getState(),
@@ -2513,6 +2543,19 @@ function lanSocketUrl() {
  * the page may well have been served from the public HTTPS site.
  */
 function resolveTarget() {
+  // A game joined from the list wins over both defaults: this page is served
+  // from your own Mac, but the match is on the friend's. A plain http page
+  // opening a plain socket on the LAN is allowed by every browser, and
+  // Chrome's Local Network Access check does not apply from a loopback page
+  // to a private address.
+  if (joinedGame) {
+    const authority = `${joinedGame.address}:${joinedGame.port}`;
+    return {
+      mode: 'lan',
+      socketUrl: `ws://${authority}/net`,
+      healthUrl: `http://${authority}/net/health`,
+    };
+  }
   if (frontend.getLanState?.().mode !== 'relay') {
     return { mode: 'lan', socketUrl: lanSocketUrl(), healthUrl: 'net/health' };
   }
@@ -2719,6 +2762,9 @@ async function startLanSession() {
   });
   refreshLanPanel('connecting');
   session.connect();
+  // The list comes from the server on this machine, so it is only worth asking
+  // when that is the one we just reached.
+  if (!relay && !joinedGame) startDiscoveryPolling();
   return session;
 }
 
@@ -2727,6 +2773,8 @@ function restartLanSession() {
   netSession?.close?.();
   netSession = null;
   remoteBots = null;
+  // Whatever it was polling may no longer be the right server to ask.
+  stopDiscoveryPolling();
   frontend.setLanState?.({ roomCode: null, roomRequired: false, joinError: '' });
   return startLanSession().then((session) => {
     netSession = session;
@@ -2739,6 +2787,57 @@ function restartLanSession() {
     refreshLanPanel();
     return session;
   });
+}
+
+/**
+ * Ask the local server who else is on this WiFi.
+ *
+ * Always the local server, never a remote one: the beacons it received are
+ * what it can see, and asking a friend's server would only tell us what THEY
+ * can see. Silent while joined elsewhere -- the panel shows the joined banner
+ * then -- and in relay mode, where the LAN is not the question.
+ *
+ * A route that is not there stops the polling rather than retrying: a plain
+ * static server will never grow one, and a 404 every two seconds for the whole
+ * session is exactly the console noise this project treats as a failure.
+ */
+async function pollDiscovery() {
+  if (!lanEligible || joinedGame) return null;
+  if (frontend.getLanState?.().mode === 'relay') return null;
+  try {
+    const response = await fetch('net/discover', { cache: 'no-store' });
+    if (!response.ok) {
+      stopDiscoveryPolling();
+      return null;
+    }
+    const info = await response.json();
+    const games = Array.isArray(info?.games) ? info.games : [];
+    frontend.setLanState?.({ games });
+    return games;
+  } catch {
+    // The server went away. `startLanSession` will start this again if it
+    // comes back, so there is nothing to log and nothing to retry.
+    stopDiscoveryPolling();
+    return null;
+  }
+}
+
+/**
+ * Poll for games, at the same cadence as the beacon.
+ *
+ * Started only once a LAN server has actually answered, so a page served by
+ * `python -m http.server` never asks a second time.
+ */
+function startDiscoveryPolling() {
+  if (!lanEligible || discoveryTimer !== null) return;
+  discoveryTimer = setInterval(pollDiscovery, 2000);
+  pollDiscovery();
+}
+
+function stopDiscoveryPolling() {
+  if (discoveryTimer === null) return;
+  clearInterval(discoveryTimer);
+  discoveryTimer = null;
 }
 
 // Kicked off without awaiting: the lobby fills in when the probe answers, and

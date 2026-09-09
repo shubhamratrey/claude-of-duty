@@ -4,7 +4,10 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import protocol from '../export/web/net/protocol.js';
-import { bonjourHostname, createLanServer, lanAddresses, resolveStaticPath } from '../server/lan-server.mjs';
+import { decodeBeacon, encodeBeacon } from '../server/lan-discovery.mjs';
+import {
+  APP_VERSION, bonjourHostname, createLanServer, lanAddresses, resolveStaticPath,
+} from '../server/lan-server.mjs';
 
 const WEB_ROOT = fileURLToPath(new URL('../export/web', import.meta.url));
 const TIMEOUT_MS = 5000;
@@ -110,8 +113,13 @@ class TestClient {
   }
 }
 
-async function boot(t) {
-  const lan = await createLanServer({ port: 0, host: '127.0.0.1', log: () => {} });
+async function boot(t, options = {}) {
+  // Discovery off by default: these tests are about the relay, and a unit test
+  // must not open a UDP port or put datagrams on somebody's WiFi. The tests
+  // that are about discovery turn it on explicitly, unicast to loopback.
+  const lan = await createLanServer({
+    port: 0, host: '127.0.0.1', log: () => {}, discovery: false, ...options,
+  });
   const clients = [];
   t.after(async () => {
     for (const client of clients) client.close();
@@ -129,6 +137,16 @@ async function boot(t) {
     return clients;
   };
   return lan;
+}
+
+/** A JSON GET, with the response headers, because CORS is part of the contract. */
+async function getJson(port, urlPath) {
+  const response = await fetch(`http://127.0.0.1:${port}${urlPath}`, { cache: 'no-store' });
+  return {
+    status: response.status,
+    cors: response.headers.get('access-control-allow-origin'),
+    body: await response.json(),
+  };
 }
 
 /** Raw GET, bypassing the URL parser so `..` reaches the server unnormalised. */
@@ -370,4 +388,78 @@ test('/net/health advertises every numeric join URL and the .local name', async 
     assert.equal(info.joinUrl, null);
     assert.deepEqual(info.joinUrls, []);
   }
+});
+
+test('/net/discover lists what the beacons found, with CORS for a joined page', async (t) => {
+  const lan = await boot(t);
+
+  const empty = await getJson(lan.port, '/net/discover');
+  assert.deepEqual(empty.body, { games: [] }, 'an honest empty list, not a 404');
+  assert.equal(empty.cors, '*');
+
+  // Straight into the table, the way a received datagram would arrive. The
+  // address is the sender's; only the port comes from the payload.
+  lan.discoveryTable.observe(decodeBeacon(encodeBeacon({
+    v: protocol.PROTOCOL_VERSION, id: 'friend01', name: 'Priyas MacBook Air',
+    port: 8000, players: 2, version: '1.0.0',
+  })), '192.168.1.9');
+  lan.discoveryTable.observe(decodeBeacon(encodeBeacon({
+    v: protocol.PROTOCOL_VERSION + 1, id: 'stale001', name: 'Rahuls Mac',
+    port: 8000, players: 1, version: '0.9.0',
+  })), '192.168.1.11');
+
+  const listed = await getJson(lan.port, '/net/discover');
+  assert.equal(listed.cors, '*',
+    'after a Join the page is served from your Mac and probes a friend\'s');
+  assert.deepEqual(listed.body.games.map((game) => ({
+    name: game.name, url: game.url, players: game.players, compatible: game.compatible,
+  })), [
+    { name: 'Priyas MacBook Air', url: 'http://192.168.1.9:8000', players: 2, compatible: true },
+    { name: 'Rahuls Mac', url: 'http://192.168.1.11:8000', players: 1, compatible: false },
+  ]);
+});
+
+test('/net/health carries CORS too, since a joined page probes it cross-origin', async (t) => {
+  const lan = await boot(t);
+  const health = await getJson(lan.port, '/net/health');
+  assert.equal(health.status, 200);
+  assert.equal(health.cors, '*');
+  assert.equal(health.body.lan, true);
+});
+
+test('discovery: false leaves no socket, and the route still answers', async (t) => {
+  const lan = await boot(t, { discovery: false });
+  assert.equal(lan.discovery, null, 'nothing bound the shared UDP port');
+  const listed = await getJson(lan.port, '/net/discover');
+  assert.deepEqual(listed.body, { games: [] });
+});
+
+test('the beacon is silent until somebody is in the match', async (t) => {
+  const lan = await boot(t, {
+    discovery: true,
+    // A port of this repo's own choosing, unicast to loopback: no broadcast
+    // leaves the machine and 8010 is left alone for a real game.
+    discoveryPort: 18099,
+    discoveryAddress: '127.0.0.1',
+    discoveryInterval: 60000,
+  });
+  assert.ok(lan.discovery, 'discovery is on');
+  assert.equal(lan.announce(), null, 'an empty roster offers nobody a ghost game');
+
+  await lan.connect(1);
+  const fields = lan.announce();
+  assert.equal(fields.v, protocol.PROTOCOL_VERSION);
+  assert.equal(fields.id, lan.discoveryId);
+  assert.equal(fields.port, lan.port, 'the beacon names the HTTP port, not the UDP one');
+  assert.equal(fields.players, 1, 'one player on your own server is a joinable game');
+  assert.equal(fields.version, APP_VERSION);
+  assert.ok(fields.name, 'the Mac name stands in until somebody sets a callsign');
+
+  // A callsign the player chose replaces the machine name; `PLAYER 1` is a
+  // roster placeholder and must not become the name of a game.
+  assert.equal(/^PLAYER \d+$/.test(fields.name), false);
+  lan.roster.rename('peer-1', 'shubham');
+  assert.equal(lan.announce().name, 'SHUBHAM');
+
+  assert.equal(lan.discovery.announceOnce(), 1, 'one unicast target');
 });

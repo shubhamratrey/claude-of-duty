@@ -89,6 +89,7 @@ menu; the selection is saved on the device.
 ```
 Claude of Duty — LAN server
   Local    http://localhost:8000
+  Discover UDP 8010   <- games on this WiFi find each other here
   LAN      http://192.168.1.42:8000   <- share this on the WiFi
 ```
 
@@ -96,6 +97,44 @@ Anyone on the same network who opens that address joins the same free-for-all.
 Up to eight people; the six bots stay in the match as extra combatants, so a
 two-player game still feels populated. Enter a name on the title screen and the
 lobby shows who else is in.
+
+### Games on this WiFi
+
+Nobody has to read an address out, either. Every running server broadcasts a
+small UDP beacon on port 8010 while it has at least one player, and the
+multiplayer panel lists what it hears:
+
+```
+Games on this WiFi
+  Shubham's MacBook      3 players     [Join]
+  Priya's MacBook Air    1 player      [Join]
+  Rahul's Mac            different version
+```
+
+A row appears within about two seconds of a game opening and drops off six
+seconds after its last beacon. The name is the host's callsign once somebody
+sets one, otherwise the Mac's own name made readable. A build that speaks a
+different protocol version is shown without a Join button rather than hidden:
+two games that cannot talk must never be allowed to try, but you should still
+be able to see that your friend is there and why it will not work.
+
+Click Join and the page you are on connects to their server instead; the panel
+then says **Playing on Priya's MacBook Air** with a **Back to my game**
+control. Your own game leaves everyone else's list while you are away, because
+your roster is empty and there is nothing to join.
+
+The first time it broadcasts, macOS asks whether the app may find devices on
+the local network. Say Allow. If it is denied, the list simply stays empty and
+the typed address still works. Three environment variables cover the rest:
+
+| Variable | Effect |
+| --- | --- |
+| `PLAYOPS_DISCOVERY=0` | Turn discovery off entirely. |
+| `PLAYOPS_DISCOVERY_PORT` | Listen and beacon somewhere other than 8010. |
+| `PLAYOPS_DISCOVERY_ADDR` | Unicast beacons at one address (optionally `address:port`) instead of broadcasting. |
+
+`npm run ai:discover` is the end-to-end check: two real servers on one shared
+discovery port, and a browser that clicks the real Join button.
 
 No internet is needed. Three.js and Recast are served from `export/web/vendor`
 rather than a CDN, so the WiFi does not need an uplink. Run `npm run vendor`
