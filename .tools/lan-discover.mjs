@@ -123,7 +123,6 @@ function joinAsPeer(wsUrl) {
 export async function runDiscoveryTest() {
   const checks = {};
   const errors = [];
-  const notes = [];
   const check = (name, passed, detail = '') => {
     checks[name] = Boolean(passed);
     const line = `  ${passed ? 'ok  ' : 'FAIL'} ${name}${detail ? ` -- ${detail}` : ''}`;
@@ -327,7 +326,6 @@ export async function runDiscoveryTest() {
       passed: errors.length === 0,
       checks,
       errors,
-      notes,
       discoveryPort: a.discovery.port,
       servers: { a: { http: a.port, id: a.discoveryId }, b: { http: b.port, id: b.discoveryId } },
       row: bRow,
@@ -341,7 +339,6 @@ export async function runDiscoveryTest() {
       passed: false,
       checks,
       errors: [...errors, error instanceof Error ? error.stack : String(error)],
-      notes,
       artifacts: artifactRoot,
     };
   } finally {
