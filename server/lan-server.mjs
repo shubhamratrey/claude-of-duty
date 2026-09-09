@@ -52,7 +52,9 @@ export const APP_VERSION = (() => {
   // No module directory means this is the packaged binary, where package.json
   // is not on disk at all -- so there is nothing to read and nothing to warn
   // about. The packaged build bakes its version in through the environment.
-  if (here === null) return String(process.env.PLAYOPS_APP_VERSION || '0.0.0');
+  // `globalThis.PLAYOPS_APP_VERSION` is substituted at bundle time by
+  // .tools/package_mac.mjs; in a checkout it is simply undefined.
+  if (here === null) return String(globalThis.PLAYOPS_APP_VERSION || '0.0.0');
   try {
     const manifest = fs.readFileSync(path.resolve(here, '..', 'package.json'), 'utf8');
     return String(JSON.parse(manifest).version ?? '0.0.0');

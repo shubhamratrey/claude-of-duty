@@ -130,11 +130,21 @@ test('the packaged app hosts the game from a mounted disk image', async (t) => {
   const banner = await waitForLog(logFile, /Scan to join: http:\/\/|no QR code/);
   assert.match(banner, /PlayOps — Claude of Duty LAN host/);
   assert.match(banner, new RegExp(`http://localhost:${port}`));
+  // Discovery has to be on in the binary, not just in the checkout: the UDP
+  // beacon is bundled code with no import.meta.url to lose, and the whole
+  // point of two people downloading this dmg is that neither has to type an
+  // address.
+  assert.match(banner, /Discover UDP 8010/);
 
   const health = await fetch(`http://127.0.0.1:${port}/net/health`);
   assert.equal(health.status, 200);
   const info = await health.json();
   assert.equal(info.lan, true);
+
+  const discover = await fetch(`http://127.0.0.1:${port}/net/discover`);
+  assert.equal(discover.status, 200);
+  assert.equal(discover.headers.get('access-control-allow-origin'), '*');
+  assert.ok(Array.isArray((await discover.json()).games), 'no games list from the packaged app');
 
   const page = await fetch(`http://127.0.0.1:${port}/index.html`);
   assert.equal(page.status, 200);

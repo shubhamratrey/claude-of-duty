@@ -325,10 +325,13 @@ export async function packageMac({ distDir = path.join(ROOT, 'dist'), vendor = t
     platform: 'node',
     target: 'node22',
     format: 'cjs',
-    // Nothing external. `ws`, `qrcode-terminal` and the game's own
-    // net/protocol.js all go in, because the binary has to run on a Mac with no
-    // node_modules anywhere near it.
+    // Nothing external. `ws`, `qrcode-terminal`, the discovery beacon and the
+    // game's own net/protocol.js all go in, because the binary has to run on a
+    // Mac with no node_modules anywhere near it.
     packages: 'bundle',
+    // package.json is not on disk inside a SEA, so the version the discovery
+    // beacon reports would be 0.0.0 unless it is baked in here.
+    define: { 'globalThis.PLAYOPS_APP_VERSION': JSON.stringify(appVersion) },
     outfile: mainScript,
     logLevel: 'warning',
   });
