@@ -285,6 +285,11 @@ export function startDiscovery({
   table = null,
   dgram = nodeDgram,
   address = null,
+  // Normally the same port beacons are heard on: one shared port is what
+  // makes discovery zero-config. Separable only for a loopback harness,
+  // because macOS hands a unicast datagram on a shared port to exactly one
+  // of the sockets bound to it -- a broadcast is what fans out.
+  sendPort = port,
   interfaces = () => os.networkInterfaces(),
   log = () => {},
   timers = { setInterval, clearInterval },
@@ -350,7 +355,7 @@ export function startDiscovery({
     let sent = 0;
     for (const target of new Set(targets())) {
       try {
-        socket.send(payload, 0, payload.length, port, target, (error) => {
+        socket.send(payload, 0, payload.length, sendPort, target, (error) => {
           if (error) degrade(error, false);
         });
         sent += 1;
@@ -381,6 +386,7 @@ export function startDiscovery({
   return {
     socket,
     port,
+    sendPort,
     announceOnce,
     get targets() {
       return targets();

@@ -244,8 +244,10 @@ export async function createLanServer({
   // port is contested; the typed address and the QR still work without it.
   discovery = process.env.PLAYOPS_DISCOVERY !== '0',
   discoveryPort = Number(process.env.PLAYOPS_DISCOVERY_PORT ?? DISCOVERY_PORT),
-  // Set to unicast beacons at one address instead of broadcasting. The
-  // loopback harness uses this; nothing in normal play does.
+  // Set to unicast beacons at one address instead of broadcasting, optionally
+  // `address:port`. The loopback harness uses this; nothing in normal play
+  // does. macOS gives a unicast datagram on a shared port to exactly one of
+  // the sockets bound to it, so a loopback pair needs the port too.
   discoveryAddress = process.env.PLAYOPS_DISCOVERY_ADDR ?? null,
   discoveryInterval = BEACON_INTERVAL_MS,
 } = {}) {
@@ -555,10 +557,12 @@ export async function createLanServer({
   watchdog.unref?.();
 
   if (discovery) {
+    const [target, targetPort] = String(discoveryAddress ?? '').split(':');
     discoveryHandle = startDiscovery({
       port: discoveryPort,
       interval: discoveryInterval,
-      address: discoveryAddress,
+      address: target || null,
+      sendPort: Number(targetPort) || discoveryPort,
       table: discoveryTable,
       announce,
       log,

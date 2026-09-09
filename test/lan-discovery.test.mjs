@@ -340,6 +340,21 @@ test('the beacon is sent on the interval, and only while there is a game to join
   assert.equal(dgram.socket.sent.length, 3, 'a closed discovery sends nothing');
 });
 
+test('a unicast target may name its own port, for a loopback pair', () => {
+  const dgram = fakeDgram();
+  const timers = fakeTimers();
+  const discovery = startDiscovery({
+    dgram, timers: timers.api, port: 19010, sendPort: 19011,
+    address: '127.0.0.1', announce: () => FIELDS,
+  });
+  timers.tick();
+  assert.deepEqual(dgram.socket.bound, { port: 19010, exclusive: false });
+  assert.deepEqual(dgram.socket.sent.map((entry) => `${entry.address}:${entry.port}`),
+    ['127.0.0.1:19011'], 'heard on one port, sent to another');
+  assert.equal(discovery.sendPort, 19011);
+  discovery.close();
+});
+
 test('with no address override the beacon goes to every broadcast address', () => {
   const dgram = fakeDgram();
   const timers = fakeTimers();
