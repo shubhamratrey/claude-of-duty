@@ -46,6 +46,14 @@ jobs:
       - name: Build PlayOps.dmg
         run: npm run package:mac
 
+      # The same build again, into a temporary dist, then mounted and played
+      # against. It costs a couple of minutes and proves the thing we are about
+      # to attach to a Release actually serves a game.
+      - name: Verify the packaged app
+        env:
+          PLAYOPS_PACKAGE_TEST: '1'
+        run: node --test test/package-mac.test.mjs
+
       - name: Report the image
         run: ls -lh dist/PlayOps.dmg && lipo -info dist/PlayOps.app/Contents/MacOS/playops-server
 

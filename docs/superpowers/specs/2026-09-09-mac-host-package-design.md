@@ -130,9 +130,10 @@ built from downloaded tarballs, not from the runner's own Node.
   `PlayOps.app/Contents/Resources/web/index.html` (detach afterwards), and
   launching the binary from the mounted image, from a *different* working
   directory, answers `/net/health` with `lan: true` and `/index.html` with
-  200. Skipped when not
-  on darwin or when network access to nodejs.org is unavailable, with the
-  reason printed.
+  200. Opt-in via `PLAYOPS_PACKAGE_TEST=1` — set in the release workflow, and
+  skipped with a printed reason otherwise, so a bare `node --test` does not
+  build a 200 MB image on every contributor's Mac — and skipped too when not on
+  darwin or when nodejs.org is unreachable and the tarballs are not cached.
 - Evidence for the report: the final `ls -la dist/`, the `lipo -info` line,
   the Terminal banner with the QR rendered, and a real join from a second
   browser to the packaged server (the existing `ai:lan` harness pointed at the

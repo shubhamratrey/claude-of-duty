@@ -9,8 +9,9 @@
 // invisible until something runs the real artifact. So this builds it and runs
 // it.
 //
-// It is slow (a few minutes, ~200 MB of output) and is deliberately not in
-// `npm run test:unit`.
+// It is slow and writes ~200 MB, so it is opt-in: set PLAYOPS_PACKAGE_TEST=1.
+// Without that, a bare `node --test` on a contributor's Mac would spend half a
+// minute building a disk image nobody asked for, so the gate is the default.
 
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
@@ -42,6 +43,9 @@ async function reachable(url) {
 
 /** Why this test cannot run here, or null if it can. */
 async function skipReason() {
+  if (process.env.PLAYOPS_PACKAGE_TEST !== '1') {
+    return 'opt-in: set PLAYOPS_PACKAGE_TEST=1 to build and run the real disk image';
+  }
   if (process.platform !== 'darwin') {
     return `needs macOS for lipo, codesign and hdiutil (this is ${process.platform})`;
   }
