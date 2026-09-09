@@ -23,8 +23,22 @@ import { WebSocketServer } from 'ws';
 import protocol from '../export/web/net/protocol.js';
 import { LanRoster } from './lan-roster.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_ROOT = path.resolve(here, '..', 'export', 'web');
+// `import.meta.url` is meaningless once this file is bundled into a single
+// executable: the script is a resource inside the binary, not a file on disk.
+// Both uses of it are therefore guarded, so the module still loads there and
+// the packaged host can supply its own `root` from `process.execPath`.
+function moduleDir() {
+  try {
+    return path.dirname(fileURLToPath(import.meta.url));
+  } catch {
+    return null;
+  }
+}
+
+const here = moduleDir();
+const DEFAULT_ROOT = here === null
+  ? path.resolve('export', 'web')
+  : path.resolve(here, '..', 'export', 'web');
 
 // Extends the map in .tools/ai-game.mjs. The design calls for that map to be
 // extracted into a shared module; doing so means editing the harness, so the
@@ -473,7 +487,20 @@ function banner(port) {
 }
 
 // Direct execution: `node server/lan-server.mjs [port]`.
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+//
+// The work is in an async function rather than at the top level because a
+// top-level await cannot be expressed in the CommonJS bundle the single
+// executable needs, and this module is part of that bundle.
+function invokedDirectly() {
+  try {
+    return Boolean(process.argv[1]) &&
+      fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+  } catch {
+    return false;
+  }
+}
+
+async function runCli() {
   const port = Number(process.env.PORT ?? process.argv[2] ?? 8000);
   const lan = await createLanServer({ port });
   process.stdout.write(`${banner(lan.port)}\n\n`);
@@ -482,6 +509,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+}
+
+if (invokedDirectly()) {
+  runCli().catch((error) => {
+    process.stderr.write(`[lan] ${error?.stack ?? error}\n`);
+    process.exit(1);
+  });
 }
 
 export default createLanServer;
